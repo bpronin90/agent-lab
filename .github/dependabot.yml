@@ -1,0 +1,12 @@
+version: 2
+updates:
+  - package-ecosystem: pip          # updates pyproject.toml and the *.lock files
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions   # keeps SHA pins current
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /
+    schedule: {interval: monthly}

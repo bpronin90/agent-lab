@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "RosterPlayer": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "team": {
+          "description": "Uppercase NFL abbreviation.",
+          "pattern": "^[A-Z]{2,3}$",
+          "title": "Team",
+          "type": "string"
+        },
+        "position": {
+          "enum": [
+            "QB",
+            "RB",
+            "WR",
+            "TE",
+            "K",
+            "DEF"
+          ],
+          "title": "Position",
+          "type": "string"
+        },
+        "slot": {
+          "description": "Assigned slot: QB, RB, WR, TE, FLEX, SUPER_FLEX, K, DEF, BN, IR, IR+.",
+          "title": "Slot",
+          "type": "string"
+        },
+        "matchup": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opponent, 'BYE', or null when unknown.",
+          "title": "Matchup"
+        },
+        "player_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Player Id"
+        }
+      },
+      "required": [
+        "name",
+        "team",
+        "position",
+        "slot"
+      ],
+      "title": "RosterPlayer",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Input: what Fantasy GM hands to an agent.",
+  "properties": {
+    "contract_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "league_id": {
+      "title": "League Id",
+      "type": "string"
+    },
+    "season": {
+      "maximum": 2100,
+      "minimum": 2000,
+      "title": "Season",
+      "type": "integer"
+    },
+    "week": {
+      "maximum": 23,
+      "minimum": 0,
+      "title": "Week",
+      "type": "integer"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "is_sample": {
+      "description": "True for synthetic fixtures. Agents must say so in their output.",
+      "title": "Is Sample",
+      "type": "boolean"
+    },
+    "scoring_verified": {
+      "default": false,
+      "title": "Scoring Verified",
+      "type": "boolean"
+    },
+    "roster": {
+      "items": {
+        "$ref": "#/$defs/RosterPlayer"
+      },
+      "title": "Roster",
+      "type": "array"
+    },
+    "waivers": {
+      "items": {
+        "$ref": "#/$defs/RosterPlayer"
+      },
+      "title": "Waivers",
+      "type": "array"
+    },
+    "unfilled_slots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Unfilled Slots",
+      "type": "array"
+    },
+    "question": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Question",
+      "type": "string"
+    }
+  },
+  "required": [
+    "league_id",
+    "season",
+    "week",
+    "captured_at",
+    "is_sample",
+    "roster",
+    "question"
+  ],
+  "title": "ResearchPackEnvelope",
+  "type": "object"
+}

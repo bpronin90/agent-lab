@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Actions are pinned to full commit SHAs
+        run: |
+          if grep -rnE '^\s*(- )?uses:\s' .github/workflows | grep -vE 'uses:\s+[^@]+@[0-9a-f]{40}(\s|$)'; then
+            echo "::error::pin every action to a full commit SHA"; exit 1
+          fi
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Install locked dependencies (hash-checked)
+        run: |
+          pip install --require-hashes -r requirements-dev.lock -r requirements-build.lock
+          pip install --no-deps --no-build-isolation -e .
+      - run: pytest
+        env:
+          PYDANTIC_AI_NO_BANNER: "1"
+      - name: Contract schemas are up to date
+        run: python scripts/export_contract_schemas.py && git diff --exit-code contracts/
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: docker build --build-arg GIT_SHA=${{ github.sha }} -t agent-lab:ci .
+      - name: Run the container offline (mock provider, no network)
+        run: |
+          docker run --rm --network none --read-only -v runs:/data/runs agent-lab:ci > out.json
+          cat out.json
+          python3 -c "import json; r=json.load(open('out.json')); assert r['status']=='succeeded', r"

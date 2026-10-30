@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.env
+runs/
+build/
+
+# Local-only agent layer, restored from the private local-layer backup.
+# Tracked on purpose: AGENTS.md and CLAUDE.md (minimal public instructions that
+# fresh and cloud checkouts need), .claude/settings.json and .claude/hooks/ (the
+# guard hook), scripts/check-scope.sh and scripts/test-governance-helpers.sh.
+/AGENTS.override.md
+/CLAUDE.local.md
+/CODEX.md
+/GEMINI.md
+/.claude/*
+!/.claude/settings.json
+!/.claude/hooks/
+/.claude/hooks/*
+!/.claude/hooks/guard-bash.py
+/.codex/
+/.agents/
+/.agent-workflows/

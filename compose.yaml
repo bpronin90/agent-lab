@@ -1,0 +1,35 @@
+# Local development. Usage:
+#   docker compose run --rm agent run "What is 6*7?"
+#   docker compose run --rm test
+services:
+  agent:
+    build: .
+    image: agent-lab:dev
+    env_file:
+      - path: .env          # optional; copy .env.example to .env to use Gemini
+        required: false
+    environment:
+      AGENT_LAB_PROVIDER: ${AGENT_LAB_PROVIDER:-mock}
+    volumes:
+      - runs:/data/runs     # named volume: run history survives container removal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  test:
+    image: python:3.13-slim
+    working_dir: /app
+    volumes:
+      - ./:/app:ro          # bind mount: tests see your live source code
+    environment:
+      PYDANTIC_AI_NO_BANNER: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: >
+      sh -c "pip install -q --root-user-action=ignore --require-hashes --target /tmp/deps -r requirements-dev.lock &&
+             PYTHONPATH=/tmp/deps:/app/src python -m pytest -p no:cacheprovider"
+    profiles: [test]
+
+volumes:
+  runs:

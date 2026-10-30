@@ -1,0 +1,13 @@
+# Persistent storage for runs.jsonl. K3s/k3d ship the "local-path" provisioner,
+# which stores data in a directory on the node itself.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-lab-runs
+  namespace: agent-lab
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Mi

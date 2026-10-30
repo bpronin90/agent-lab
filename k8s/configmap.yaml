@@ -1,0 +1,12 @@
+# Non-secret settings, injected into the container as environment variables.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-lab-config
+  namespace: agent-lab
+data:
+  AGENT_LAB_PROVIDER: "mock"
+  AGENT_LAB_GEMINI_MODEL: "gemini-2.5-flash"
+  AGENT_LAB_MAX_REQUESTS: "6"
+  AGENT_LAB_MAX_TOOL_CALLS: "8"
+  AGENT_LAB_RUN_LOG_DIR: "/data/runs"

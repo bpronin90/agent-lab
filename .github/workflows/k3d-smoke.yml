@@ -1,0 +1,55 @@
+name: k3d smoke test
+
+# Spins up a throwaway single-node K3s cluster (k3d = K3s in Docker) inside the
+# runner, deploys the manifests, runs one Job and checks its output. Nothing
+# is deployed anywhere persistent.
+on:
+  pull_request:
+    paths: ["k8s/**", "Dockerfile", "src/**", "pyproject.toml", ".github/workflows/k3d-smoke.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  K3D_VERSION: v5.8.3
+  # sha256 of k3d-linux-amd64 from the release's checksums.txt
+  K3D_SHA256: dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install k3d (pinned release, checksum verified)
+        run: |
+          curl -fsSL -o k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          echo "${K3D_SHA256}  k3d" | sha256sum --check
+          sudo install -m 0755 k3d /usr/local/bin/k3d && rm k3d
+      - name: Build image
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} -t agent-lab:dev .
+      - name: Create cluster
+        run: k3d cluster create agent-lab --agents 0 --wait --timeout 120s
+      - name: Import image into the cluster node
+        run: k3d image import agent-lab:dev --cluster agent-lab
+      - name: Apply manifests
+        run: |
+          kubectl apply -k k8s/
+          kubectl -n agent-lab get all,pvc,configmap
+      - name: Run the CronJob once as a Job
+        run: |
+          kubectl -n agent-lab create job smoke --from=cronjob/agent-lab-demo
+          kubectl -n agent-lab wait --for=condition=complete job/smoke --timeout=180s
+      - name: Check output
+        run: |
+          kubectl -n agent-lab logs job/smoke | tee out.json
+          python3 -c "import json; r=json.load(open('out.json')); assert r['status']=='succeeded' and r['tool_calls'], r"
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl -n agent-lab describe job,pod,pvc || true
+          kubectl -n agent-lab logs job/smoke || true
+      - name: Delete cluster
+        if: always()
+        run: k3d cluster delete agent-lab

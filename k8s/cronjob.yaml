@@ -1,0 +1,58 @@
+# Runs the demo agent on a schedule. Agents are batch work, so this is a
+# CronJob (creates Jobs, which create Pods that exit) rather than a Deployment.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent-lab-demo
+  namespace: agent-lab
+spec:
+  schedule: "0 13 * * *"          # 13:00 UTC daily
+  suspend: true                   # off until you choose to enable it
+  concurrencyPolicy: Forbid       # never run two agents at once
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1             # retry a failed pod once, then give up
+      activeDeadlineSeconds: 300  # hard wall-clock cap per run
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: agent
+              image: agent-lab:dev
+              imagePullPolicy: IfNotPresent   # use the image imported into the node
+              args: ["run", "What is (12+30)*2 and what is kubernetes?"]
+              envFrom:
+                - configMapRef:
+                    name: agent-lab-config
+                - secretRef:
+                    name: agent-lab-secrets
+                    optional: true            # absent = mock provider only
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {cpu: 500m, memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: runs
+                  mountPath: /data/runs
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: runs
+              persistentVolumeClaim:
+                claimName: agent-lab-runs
+            - name: tmp
+              emptyDir: {}

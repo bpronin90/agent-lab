@@ -1,0 +1,19 @@
+{
+  "contract_version": "1.0",
+  "league_id": "SAMPLE-LEAGUE",
+  "season": 2026,
+  "week": 8,
+  "captured_at": "2026-10-28T12:00:00Z",
+  "is_sample": true,
+  "scoring_verified": false,
+  "roster": [
+    {"name": "Sample Quarterback", "team": "KC", "position": "QB", "slot": "QB", "matchup": null},
+    {"name": "Sample Runner", "team": "SF", "position": "RB", "slot": "RB", "matchup": "BYE"},
+    {"name": "Sample Receiver", "team": "MIA", "position": "WR", "slot": "BN", "matchup": null}
+  ],
+  "waivers": [
+    {"name": "Sample Waiver Tight End", "team": "DET", "position": "TE", "slot": "BN", "matchup": null}
+  ],
+  "unfilled_slots": ["RB"],
+  "question": "Who should fill my open RB slot? (synthetic fixture)"
+}

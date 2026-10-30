@@ -1,0 +1,66 @@
+name: Agent run (manual + scheduled)
+
+# Safety gates:
+#   * Scheduled runs do nothing unless repository variable AGENT_LAB_SCHEDULE_ENABLED == 'true'.
+#   * The Gemini provider is used only if secret GEMINI_API_KEY exists; otherwise it fails fast.
+#   * Manual runs default to the offline mock provider.
+#   * Runs never write to Supabase in Phase 1; the run record is uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Prompt for the demo agent
+        default: "What is (12+30)*2 and what is k3s?"
+      provider:
+        description: Model provider
+        type: choice
+        options: [mock, gemini]
+        default: mock
+  schedule:
+    - cron: "17 14 * * 1"   # Mondays 14:17 UTC; off-the-hour to avoid scheduler congestion
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.event_name == 'workflow_dispatch' || vars.AGENT_LAB_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AGENT_LAB_PROVIDER: ${{ github.event_name == 'schedule' && (vars.AGENT_LAB_SCHEDULE_PROVIDER || 'mock') || inputs.provider }}
+      AGENT_LAB_PROMPT: ${{ inputs.prompt || 'What is (12+30)*2 and what is k3s?' }}
+      AGENT_LAB_RUN_LOG_DIR: runs
+      PYDANTIC_AI_NO_BANNER: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Install locked dependencies (hash-checked)
+        run: |
+          pip install --require-hashes -r requirements.lock -r requirements-build.lock
+          pip install --no-deps --no-build-isolation .
+      - name: Check provider configuration
+        env:
+          HAS_KEY: ${{ secrets.GEMINI_API_KEY != '' }}
+        run: |
+          if [ "$AGENT_LAB_PROVIDER" = "gemini" ] && [ "$HAS_KEY" != "true" ]; then
+            echo "::error::provider=gemini but secret GEMINI_API_KEY is not configured"; exit 1
+          fi
+      - name: Run agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        # The prompt is passed via env, never interpolated into the script (prevents shell injection).
+        run: agent-lab run "$AGENT_LAB_PROMPT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: agent-run-${{ github.run_id }}
+          path: runs/
+          retention-days: 14
+          if-no-files-found: ignore

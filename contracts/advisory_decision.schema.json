@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "Recommendation": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "start",
+            "sit",
+            "add",
+            "drop",
+            "hold",
+            "investigate"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "player": {
+          "title": "Player",
+          "type": "string"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "requires_verification": {
+          "description": "Facts (injuries, eligibility, scoring) a human must check first.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Requires Verification",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "player",
+        "rationale"
+      ],
+      "title": "Recommendation",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Output: what an agent hands back. Advisory only; never executed automatically.",
+  "properties": {
+    "contract_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "advisory_only": {
+      "const": true,
+      "default": true,
+      "title": "Advisory Only",
+      "type": "boolean"
+    },
+    "based_on_sample_data": {
+      "title": "Based On Sample Data",
+      "type": "boolean"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "recommendations": {
+      "items": {
+        "$ref": "#/$defs/Recommendation"
+      },
+      "maxItems": 20,
+      "title": "Recommendations",
+      "type": "array"
+    },
+    "confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    }
+  },
+  "required": [
+    "based_on_sample_data",
+    "summary",
+    "recommendations",
+    "confidence"
+  ],
+  "title": "AdvisoryDecision",
+  "type": "object"
+}

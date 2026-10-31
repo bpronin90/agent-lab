@@ -14,6 +14,7 @@ also a hands-on way to learn Docker and Kubernetes.
 - **Orchestration:** Kubernetes manifests for a single-node K3s cluster. CI runs a k3d smoke test.
 - **Cloud schedule:** a GitHub Actions workflow you start by hand. Its schedule is gated off until you enable it.
 - **Persistence:** a local `runs.jsonl` file today. A proposed `agent_lab` Supabase schema is included but **not applied**.
+- **Calm Down (Experiment 3):** a research agent that investigates a scary AI prediction on both sides, checks its citations against retrieved text, and renders a one-off email. See [docs/experiments/calm-down.md](docs/experiments/calm-down.md).
 - **Fantasy GM:** a versioned integration contract (JSON Schema + Pydantic). The Fantasy GM repository is untouched.
 
 ## Architecture
@@ -38,7 +39,7 @@ also a hands-on way to learn Docker and Kubernetes.
 | `src/agent_lab/models.py` | Provider factory (`mock` / `gemini`). |
 | `src/agent_lab/mock_provider.py` | Offline tool-calling model for tests and demos. |
 | `src/agent_lab/runtime.py` | Bounded run, `RunRecord` capture, JSONL log. |
-| `src/agent_lab/agents/` | Agent registry and the demo agent. |
+| `src/agent_lab/agents/` | Agent registry, the demo agent, and the `calm_down` research agent. |
 | `src/agent_lab/contracts/fantasy_gm.py` | Fantasy GM integration contract. |
 | `contracts/*.schema.json` | Generated JSON Schemas of the contract. |
 | `Dockerfile`, `compose.yaml` | Container image and local dev setup. |
@@ -158,6 +159,7 @@ but the `GEMINI_API_KEY` secret is missing, the job fails fast. Nothing is writt
 
 ## Other docs
 
+- [docs/experiments/calm-down.md](docs/experiments/calm-down.md): Calm Down research agent (`agent-lab calm-down`, exit code 4 = research insufficient).
 - [docs/security.md](docs/security.md): security model and free-tier limits.
 - [docs/supabase-schema.md](docs/supabase-schema.md): the `agent_lab` schema proposal.
 - [docs/integration/fantasy-gm-contract.md](docs/integration/fantasy-gm-contract.md): the Fantasy GM contract.

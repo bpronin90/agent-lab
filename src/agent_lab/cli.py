@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     calm = sub.add_parser("calm-down", help="Research a fear, verify citations, render a one-off email (never sent).")
     calm.add_argument("fear")
     calm.add_argument("--out", default="calm-down-out", help="Directory for email.html, email.txt and the dossier.")
+    calm.add_argument("--review", default=None, help="Human support-review file (approved hashes), or 'fixture' for the offline preview's self-review.")
     calm.add_argument("--no-save", action="store_true", help="Do not append to the local run log.")
     sub.add_parser("healthcheck", help="Validate settings without calling any model.")
     args = parser.parse_args(argv)
@@ -52,13 +53,14 @@ def main(argv: list[str] | None = None) -> int:
 def _calm_down(args, settings: Settings) -> int:
     from pathlib import Path
 
-    from agent_lab.agents.calm_down.pipeline import research_settings, run_calm_down
+    from agent_lab.agents.calm_down.pipeline import fixture_review, load_review, research_settings, run_calm_down
     from agent_lab.agents.calm_down.retrieval import mode_from_env
 
     try:
         mode = mode_from_env()
-        result = run_calm_down(args.fear, research_settings(settings), mode, Path(args.out))
-    except ValueError as exc:
+        review = fixture_review() if args.review == "fixture" else load_review(Path(args.review) if args.review else None)
+        result = run_calm_down(args.fear, research_settings(settings), mode, Path(args.out), review)
+    except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if not args.no_save:
@@ -66,11 +68,14 @@ def _calm_down(args, settings: Settings) -> int:
     summary = {"run_id": result.record.run_id, "run_status": result.record.status, "retrieval": mode,
                "research_status": result.report.status if result.report else None,
                "problems": result.report.problems if result.report else [],
+               "pending_review": result.report.pending_review if result.report else [],
                "files": {k: str(v) for k, v in result.files.items()}}
     print(json.dumps(summary, indent=2))
     if result.record.status != "succeeded":
         return exit_code(result.record)
-    return 0 if result.ok else 4
+    if result.ok:
+        return 0
+    return 5 if result.report and result.report.status == "needs_review" else 4
 
 
 EXIT_CODES = {"config": 2, "transient": 3}

@@ -10,6 +10,7 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -18,7 +19,7 @@ from agent_lab.agents.calm_down import AGENT_NAME
 from agent_lab.agents.calm_down.render import render_dossier_md, render_email_html, render_email_text
 from agent_lab.agents.calm_down.retrieval import RetrievalMode, research_session
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
-from agent_lab.agents.calm_down.verify import VerificationReport, verify_dossier
+from agent_lab.agents.calm_down.verify import VerificationReport, review_request, verify_dossier
 from agent_lab.config import Settings
 from agent_lab.runtime import run_agent
 from agent_lab.schemas import RunRecord
@@ -56,10 +57,42 @@ def build_prompt(fear: str) -> str:
             "Research it on both sides, verify, then write the Calm Down edition.")
 
 
-def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: Path) -> CalmDownResult:
+# Every file this pipeline may write. They are removed before each run so that a failed run
+# can never leave an earlier run's email behind under the documented names.
+GENERATED_FILES = ("email.html", "email.txt", "research-dossier.md", "LIMITATION.md", "sources.json",
+                   "review-request.json")
+
+
+def clear_generated(out_dir: Path) -> None:
+    for name in GENERATED_FILES:
+        path = out_dir / name
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+
+
+def fixture_review() -> dict:
+    """The authoring agent's own, non-independent approval of the fixture preview's claims."""
+    text = resources.files("agent_lab.agents.calm_down.fixtures").joinpath("fixture_review.json").read_text("utf-8")
+    return json.loads(text)
+
+
+def load_review(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    data = json.loads(path.read_text("utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("approvals", []), list):
+        raise ValueError("review file must be a JSON object with a reviewer and an approvals list")
+    return data
+
+
+def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: Path,
+                  review: dict | None = None) -> CalmDownResult:
     if mode == "live" and settings.provider == "mock":
         raise ValueError("live retrieval with the mock provider would mix fixture content with live sources")
+    if review is not None and mode == "live" and review.get("scope") == "fixture":
+        raise ValueError("a fixture-scoped review cannot approve a live edition; a person must review it")
     out_dir.mkdir(parents=True, exist_ok=True)
+    clear_generated(out_dir)
     with research_session(mode) as session:
         record = run_agent(build_prompt(fear), settings, AGENT_NAME)
     sources = session.sources
@@ -78,7 +111,7 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
         report = VerificationReport(status="insufficient",
                                     problems=[f"research run failed ({record.error_class}): {record.error}"])
     if dossier is not None:
-        report = verify_dossier(dossier, session.read_sources())
+        report = verify_dossier(dossier, session.read_sources(), review)
     assert report is not None
     if session.errors:
         report.problems.extend(f"retrieval error (non-fatal): {e}" for e in session.errors)
@@ -92,6 +125,15 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
         files["html"].write_text(render_email_html(dossier, report, sources, fixture), "utf-8")
         files["text"] = out_dir / "email.txt"
         files["text"].write_text(render_email_text(dossier, report, sources, fixture), "utf-8")
+    elif dossier is not None and report.status == "needs_review":
+        files["review_request"] = out_dir / "review-request.json"
+        files["review_request"].write_text(json.dumps(review_request(dossier, report), indent=2), "utf-8")
+        files["limitation"] = out_dir / "LIMITATION.md"
+        files["limitation"].write_text(
+            "# Calm Down is waiting for human support review\n\nThe quotes were found in the retrieved sources, "
+            "but a machine cannot prove that each claim fairly represents its evidence. No email was produced. "
+            "Review `review-request.json`, then rerun with `--review review.json`.\n\nPending: "
+            + ", ".join(report.pending_review) + "\n", "utf-8")
     else:
         files["limitation"] = out_dir / "LIMITATION.md"
         files["limitation"].write_text(

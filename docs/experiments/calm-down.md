@@ -31,31 +31,45 @@ fear ──► runtime.run_agent("calm_down")  (same bounds, retries, error clas
 
 ### What verification enforces
 
-- A cited source must have been **read** during this run (`read_source`/`fetch_url`). Being listed by a search is not enough.
-- The evidence quote must appear verbatim in the text the model was shown. The match ignores case, whitespace and typographic quotes.
-- A claim may not contain a number that is not in its quote.
-- Editorial copy (headline, opening, analogies, doom meter, advice, verdict) may not contain URLs, guarantees ("will never be automated", "safe forever"), or numbers absent from verified evidence.
-- The edition must have at least 4 verified findings from at least 3 sources, verified evidence both supporting and challenging the fear, and populated "Doomers Get Right" and "Reasons to Chill" sections.
-- If any rule fails, the email is not rendered. The dossier and `LIMITATION.md` explain why (CLI exit code 4).
+Two layers. Both must pass before an email is rendered.
 
-These checks prove that quotes are **present in retrieved text**. They cannot prove that a source is correct, or that the model's paraphrase in `claim` is fair. That judgment is left to the dossier's reader.
+**1. Mechanical checks (`verify.py`).**
+- A cited source must have been **read** during this run. Being listed by a search is not enough.
+- The evidence quote must appear verbatim in the text shown to the model, in **every** cited source. The match ignores case, whitespace and typographic quotes. Padding a finding with unrelated sources is rejected.
+- A claim may not contain a number that is not in its quote. A claim and its quote must agree on negation, so a reversed claim is rejected.
+- These rules cover every model-written field that reaches the email: headline, opening, doom meter, advice, verdict, uncertainties, limitations, caveats and analogies.
+  - No URLs or domains.
+  - No guarantees or proof claims ("safe forever", "proves").
+  - No numbers in global editorial copy.
+  - A caveat or analogy may reuse only numbers from its own finding's quote.
+- "What the Doomers Get Right" may hold only supporting or mixed findings and needs at least one supporting one. "Reasons to Chill" may hold only challenging or mixed findings and needs at least one challenging one. No finding may appear in both.
+- The edition needs at least 4 verified findings and at least 3 distinct **works**, counted by URL rather than by id, with verified evidence on both sides.
+- If any rule fails, the status is `insufficient`. No email is written, only `LIMITATION.md` and the dossier (exit 4).
+
+**2. Human support review.** Matching substrings cannot prove that a claim fairly represents its evidence: its population, outcome, direction, or quantitative context. So the pipeline fails closed. After the mechanical checks pass, it writes `review-request.json`, which pairs each claim with its quote and gives each pair a content hash, plus one hash for the editorial copy. A person approves the hashes in a review file and reruns with `--review review.json`. Any change to an approved text invalidates its approval. Until every item is approved the status is `needs_review` and no email is written (exit 5).
+
+`--review fixture` uses the packaged fixture self-review. It was written by the authoring agent, is not independent, and covers the offline preview only. The pipeline refuses it for live runs.
+
+Each run first deletes the files this pipeline generates in the output directory (`email.html`, `email.txt`, `research-dossier.md`, `LIMITATION.md`, `sources.json`, `review-request.json`), so a failed run cannot leave an earlier email behind. Other files are untouched.
 
 ## Running it
 
 ```sh
 # Offline fixture preview (default): mock provider + hand-written corpus. No network.
-agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-out
+agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-out --review fixture
 
 # Live edition: explicit opt-in to BOTH a real model and real retrieval.
 export AGENT_LAB_PROVIDER=gemini GEMINI_API_KEY=...        # free tier; never commit
 export AGENT_LAB_CALM_DOWN_RETRIEVAL=live
-agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-live
+agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-live   # exit 5: review
+# a person reviews calm-down-live/review-request.json, writes review.json, then:
+agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-live --review review.json
 ```
 
 Live retrieval with the mock provider is refused, so fixture text can never be mixed into a live edition.
 Unless you set them, research runs use larger bounds: 16 requests, 30 tool calls, 8192 output tokens, and a 300 s deadline.
 
-Exit codes: `0` edition rendered, `4` research insufficient (dossier only), and otherwise the usual runtime codes (`2` config, `3` transient, `1` other).
+Exit codes: `0` edition rendered, `4` research insufficient, `5` waiting for human support review (dossier only in both cases), and otherwise the usual runtime codes (`2` config, `3` transient, `1` other).
 
 ## Live retrieval safety
 
@@ -72,7 +86,7 @@ to paraphrase real public works. They are **not verified quotations**, and their
 against the linked sources. Passing verification there only shows that the pipeline works. The email, text and dossier
 all carry a FIXTURE PREVIEW banner. The offline tests do not validate live research.
 
-A live edition has not been produced yet. It needs owner authorization (live Gemini runs spend free-tier quota),
+Some fixture figures are older vintages: newer releases of the Stanford payroll study and the BLS outlook report different numbers, and the legal-hallucination figures are pinned to arXiv v1. A live edition has not been produced yet. It needs owner authorization (live Gemini runs spend free-tier quota),
 a `GEMINI_API_KEY`, and network egress to OpenAlex and the allowlisted hosts.
 
 ## Kubernetes / n8n

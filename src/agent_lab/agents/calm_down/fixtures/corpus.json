@@ -54,8 +54,8 @@
     {
       "source_id": "S6",
       "title": "Large Legal Fictions: Profiling Legal Hallucinations in Large Language Models",
-      "url": "https://arxiv.org/abs/2401.01301",
-      "publisher": "arXiv / Journal of Legal Analysis (Dahl, Magesh, Suzgun, Ho)",
+      "url": "https://arxiv.org/abs/2401.01301v1",
+      "publisher": "arXiv v1 (Dahl, Magesh, Suzgun, Ho); later versions report different figures",
       "year": 2024,
       "tier": "primary",
       "keywords": ["legal", "hallucination", "lawyers", "accuracy", "judgment", "court"],

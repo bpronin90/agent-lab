@@ -12,13 +12,13 @@ from agent_lab import runtime
 from agent_lab.agents import REGISTRY
 from agent_lab.agents.calm_down import retrieval
 from agent_lab.agents.calm_down.mock_script import load_mock_dossier
-from agent_lab.agents.calm_down.pipeline import research_settings, run_calm_down
+from agent_lab.agents.calm_down.pipeline import fixture_review, research_settings, run_calm_down
 from agent_lab.agents.calm_down.render import render_email_html
 from agent_lab.agents.calm_down.retrieval import (
     RetrievalError, SourceRecord, check_url, html_to_text, mode_from_env, research_session, safe_get,
 )
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
-from agent_lab.agents.calm_down.verify import normalize, verify_dossier
+from agent_lab.agents.calm_down.verify import normalize, review_request, verify_dossier
 from agent_lab.cli import main
 from agent_lab.config import Settings
 
@@ -43,7 +43,7 @@ def dossier(**changes):
 # ---------------------------------------------------------------- end to end (fixture)
 
 def test_fixture_pipeline_produces_labeled_artifacts(tmp_path):
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
     assert result.record.status == "succeeded" and result.ok, result.report.problems
     assert result.record.agent_name == "calm_down"
     assert set(result.record.tools_used) == {"search_sources", "read_source"}
@@ -58,7 +58,7 @@ def test_fixture_pipeline_produces_labeled_artifacts(tmp_path):
 
 
 def test_email_html_is_email_safe(tmp_path):
-    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
     html = (tmp_path / "email.html").read_text()
     assert "<script" not in html.lower() and "<img" not in html.lower() and "javascript:" not in html.lower()
     assert "<link" not in html.lower() and "@import" not in html
@@ -69,7 +69,7 @@ def test_email_html_is_email_safe(tmp_path):
 
 
 def test_every_rendered_citation_was_read_and_verified(tmp_path):
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
     verified_sources = {sid for f in result.report.verified for sid in f.source_ids}
     provenance = json.loads((tmp_path / "sources.json").read_text())
     read = {s["source_id"] for s in provenance["sources"] if s["read"]}
@@ -78,7 +78,10 @@ def test_every_rendered_citation_was_read_and_verified(tmp_path):
 
 def test_html_escapes_model_text():
     d = dossier(opening="Cousin <script>alert(x)</script> & friends, calm down please now.")
-    report = verify_dossier(d, read_all_fixture_sources())
+    review = fixture_review()
+    review["approvals"].append(review_request(d, verify_dossier(d, read_all_fixture_sources()))["editorial"]["hash"])
+    report = verify_dossier(d, read_all_fixture_sources(), review)
+    assert report.ok, report.problems
     html = render_email_html(d, report, read_all_fixture_sources(), fixture=True)
     assert "<script>alert" not in html and "&lt;script&gt;" in html
 
@@ -159,7 +162,7 @@ def test_failed_run_writes_limitation_not_email(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(broken, model_name="x"))
     monkeypatch.setattr(runtime, "_sleep", lambda s: None)
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
     assert result.record.status == "failed" and result.record.error_class == "transient"
     assert not (tmp_path / "email.html").exists() and (tmp_path / "LIMITATION.md").exists()
 
@@ -170,7 +173,7 @@ def test_model_citing_unread_sources_gets_no_email(tmp_path, monkeypatch):
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, load_mock_dossier())])
 
     monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(lazy, model_name="lazy"))
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
     assert result.record.status == "succeeded" and not result.ok
     assert not (tmp_path / "email.html").exists()
     assert "not read" in (tmp_path / "research-dossier.md").read_text()
@@ -178,7 +181,10 @@ def test_model_citing_unread_sources_gets_no_email(tmp_path, monkeypatch):
 
 def test_cli_calm_down_exit_codes(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("AGENT_LAB_RUN_LOG_DIR", str(tmp_path / "runs"))
-    assert main(["calm-down", FEAR, "--out", str(tmp_path / "ok")]) == 0
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "ok"), "--review", "fixture"]) == 0
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "pending")]) == 5  # needs human review
+    assert not (tmp_path / "pending" / "email.html").exists()
+    assert (tmp_path / "pending" / "review-request.json").exists()
     assert (tmp_path / "runs" / "runs.jsonl").exists()
     monkeypatch.setenv("AGENT_LAB_CALM_DOWN_RETRIEVAL", "live")
     assert main(["calm-down", FEAR, "--out", str(tmp_path / "x")]) == 2  # live + mock refused
@@ -266,3 +272,140 @@ def test_registry_keeps_demo_and_adds_calm_down():
 def test_research_settings_respect_explicit_env():
     s = research_settings(Settings.from_env({}), env={"AGENT_LAB_MAX_REQUESTS": "5"})
     assert s.max_requests == Settings().max_requests and s.max_tool_calls == 30
+
+
+# ---------------------------------------------------------------- review regressions (PR #10)
+
+def verify_mutated(mutate, review=True):
+    data = load_mock_dossier()
+    mutate(data)
+    return verify_dossier(CalmDownDossier.model_validate(data), read_all_fixture_sources(),
+                          fixture_review() if review else None)
+
+
+def finding(data, fid):
+    return next(f for f in data["findings"] if f["id"] == fid)
+
+
+def test_reversed_claim_is_rejected():
+    report = verify_mutated(lambda d: finding(d, "F4").update(
+        claim="AI chatbots significantly increased earnings and recorded hours in every occupation."))
+    assert any(r.item == "F4" and "negation" in r.reason for r in report.rejected)
+    assert not report.ok
+
+
+def test_reversed_claim_without_negation_cue_still_needs_human_approval():
+    # Mechanical checks cannot catch every distortion, so a changed claim invalidates its approval.
+    report = verify_mutated(lambda d: finding(d, "F8").update(
+        claim="In a large workplace study, a generative AI assistant raised productivity, mostly for senior experts."))
+    assert report.status == "needs_review" and "F8" in report.pending_review
+
+
+def test_unrelated_reused_statistic_in_verdict_is_rejected():
+    report = verify_mutated(lambda d: d.update(
+        verdict="Research proves that 88% of accountants are safe from job loss caused by AI."))
+    assert not report.ok
+    assert any("verdict" in p and "88" in p for p in report.problems)
+    assert any("verdict" in p and "guarantee" in p for p in report.problems)
+
+
+@pytest.mark.parametrize("where", ["caveat", "uncertainty", "limitation"])
+def test_every_rendered_field_is_checked(where):
+    payload = "99% of lawyers are safe forever. Read https://evil.example for details."
+
+    def mutate(d):
+        if where == "caveat":
+            finding(d, "F1")["caveat"] = payload
+        elif where == "uncertainty":
+            d["uncertainties"][0] = payload
+        else:
+            d["limitations"][0] = payload
+
+    report = verify_mutated(mutate)
+    assert not report.ok
+    joined = " ".join(report.problems)
+    assert "URL" in joined and "guarantee" in joined and "99" in joined
+
+
+def test_caveat_may_reuse_its_own_quote_numbers_only():
+    ok = verify_mutated(lambda d: finding(d, "F2").update(caveat="The 13 percent figure is relative, not absolute."))
+    assert not any("F2.caveat" in p for p in ok.problems)
+    bad = verify_mutated(lambda d: finding(d, "F2").update(caveat="The 88 percent figure is relative."))
+    assert any("F2.caveat" in p for p in bad.problems)
+
+
+def test_padded_citations_are_rejected_and_do_not_count():
+    quote = "The analysis measures exposure of tasks, not whether jobs will be eliminated"
+
+    def mutate(d):
+        for f in d["findings"]:
+            f.update(source_ids=["S1", "S2", "S3"], evidence_quote=quote,
+                     claim="The analysis measures task exposure and not whether jobs will be eliminated.")
+
+    report = verify_mutated(mutate)
+    assert report.verified == [] and all("unsupported citation" in r.reason for r in report.rejected)
+    assert not report.ok
+
+
+def test_distinct_works_count_urls_not_ids():
+    sources = read_all_fixture_sources()
+    for sid in ("S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12"):
+        sources[sid].url = "https://www.nber.org/papers/same"
+    report = verify_dossier(dossier(), sources, fixture_review())
+    assert report.distinct_works == 2 and not report.ok
+
+
+def test_opposing_sections_must_hold_their_stance():
+    report = verify_mutated(lambda d: d.update(doomers_get_right=["F4"], reasons_to_chill=["F4"]))
+    assert not report.ok
+    joined = " ".join(report.problems)
+    assert "wrong stance" in joined and "both sides" in joined and "supports_fear" in joined
+
+
+def test_needs_review_without_approvals():
+    report = verify_mutated(lambda d: None, review=False)
+    assert report.status == "needs_review" and "editorial" in report.pending_review
+    with pytest.raises(ValueError):
+        render_email_html(dossier(), report, read_all_fixture_sources(), fixture=True)
+
+
+def test_fixture_review_refused_for_live(tmp_path):
+    live = research_settings(Settings.from_env({"AGENT_LAB_PROVIDER": "gemini", "GEMINI_API_KEY": "x"}), env={})
+    with pytest.raises(ValueError, match="fixture-scoped"):
+        run_calm_down(FEAR, live, "live", tmp_path, fixture_review())
+
+
+# ---------------------------------------------------------------- stale artifacts
+
+def _fail_run(monkeypatch):
+    def broken(messages, info):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(broken, model_name="x"))
+    monkeypatch.setattr(runtime, "_sleep", lambda s: None)
+
+
+def test_success_then_failure_leaves_no_stale_email(tmp_path, monkeypatch):
+    assert run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review()).ok
+    assert (tmp_path / "email.html").exists()
+    _fail_run(monkeypatch)
+    result = run_calm_down("AI will replace dentists", OFFLINE, "fixture", tmp_path, fixture_review())
+    assert not result.ok
+    for name in ("email.html", "email.txt", "research-dossier.md"):
+        assert not (tmp_path / name).exists()
+    assert (tmp_path / "LIMITATION.md").exists()
+
+
+def test_failure_then_success_leaves_no_stale_limitation(tmp_path, monkeypatch):
+    with monkeypatch.context() as m:
+        _fail_run(m)
+        run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    assert (tmp_path / "LIMITATION.md").exists()
+    assert run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review()).ok
+    assert not (tmp_path / "LIMITATION.md").exists() and (tmp_path / "email.html").exists()
+
+
+def test_unrelated_files_in_output_dir_are_kept(tmp_path):
+    (tmp_path / "notes.txt").write_text("mine")
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    assert (tmp_path / "notes.txt").read_text() == "mine"

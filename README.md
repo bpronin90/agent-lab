@@ -159,7 +159,7 @@ but the `GEMINI_API_KEY` secret is missing, the job fails fast. Nothing is writt
 
 ## Other docs
 
-- [docs/experiments/calm-down.md](docs/experiments/calm-down.md): Calm Down research agent (`agent-lab calm-down`, exit code 4 = research insufficient).
+- [docs/experiments/calm-down.md](docs/experiments/calm-down.md): Calm Down research agent (`agent-lab calm-down`; exit 4 = research insufficient, 5 = waiting for human support review).
 - [docs/security.md](docs/security.md): security model and free-tier limits.
 - [docs/supabase-schema.md](docs/supabase-schema.md): the `agent_lab` schema proposal.
 - [docs/integration/fantasy-gm-contract.md](docs/integration/fantasy-gm-contract.md): the Fantasy GM contract.

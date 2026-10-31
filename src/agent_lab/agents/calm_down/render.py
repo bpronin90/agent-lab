@@ -15,7 +15,7 @@ from agent_lab.agents.calm_down.schemas import CalmDownDossier, Finding
 from agent_lab.agents.calm_down.verify import VerificationReport
 
 KIND_LABEL = {"demonstrated_fact": "MEASURED", "forecast": "FORECAST", "speculation": "SPECULATION"}
-KIND_COLOR = {"demonstrated_fact": "#1f7a4d", "forecast": "#b8860b", "speculation": "#8a3ffc"}
+KIND_COLOR = {"demonstrated_fact": "#1f7a4d", "forecast": "#7a5600", "speculation": "#8a3ffc"}
 STANCE_LABEL = {"supports_fear": "point for the robots", "challenges_fear": "point for the humans", "mixed": "it's complicated"}
 METER_COLORS = ["#2bb673", "#55c26a", "#8cc63f", "#c3d135", "#f2d43d", "#f7b733", "#f7941d", "#f15a29", "#e8352b", "#b5121b"]
 
@@ -57,7 +57,7 @@ def _section(title: str, emoji: str, color: str, body: str, kicker: str = "") ->
 <tr><td class="pad" style="padding:28px 32px 8px 32px;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
     <td style="background:{color};border:3px solid {INK};border-radius:14px;padding:12px 18px;box-shadow:6px 6px 0 {INK};">
-      {kick}<div style="font:bold 26px/1.15 {SANS};color:{INK};">{emoji}&nbsp;{_e(title)}</div>
+      {kick}<h2 style="margin:0;font:bold 26px/1.15 {SANS};color:{INK};">{emoji}&nbsp;{_e(title)}</h2>
     </td></tr></table>
 </td></tr>
 <tr><td class="pad" style="padding:8px 32px 8px 32px;">{body}</td></tr>"""
@@ -80,10 +80,10 @@ def _finding_card(f: Finding, cites: Citations, accent: str) -> str:
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px 0;"><tr>
 <td style="background:{CARD};border:2px solid {INK};border-top:8px solid {accent};border-radius:10px;padding:16px 18px;">
   <div><span style="display:inline-block;background:{KIND_COLOR[f.evidence_kind]};color:#fff;font:bold 11px {SANS};letter-spacing:1px;padding:3px 8px;border-radius:20px;">{KIND_LABEL[f.evidence_kind]}</span>
-  <span style="font:11px {SANS};color:#6b6580;text-transform:uppercase;letter-spacing:1px;">&nbsp;{STANCE_LABEL[f.stance]} · confidence: {f.confidence}</span>{surprise}</div>
+  <span style="font:11px {SANS};color:#575170;text-transform:uppercase;letter-spacing:1px;">&nbsp;{STANCE_LABEL[f.stance]} · confidence: {f.confidence}</span>{surprise}</div>
   <div style="margin-top:8px;font:bold 18px/1.4 {FONT};color:{INK};">{_e(f.claim)}{cites.html(f)}</div>
   <div style="margin-top:8px;font:15px/1.5 {FONT};color:#3d3852;">“{_e(f.evidence_quote)}”</div>
-  <div style="margin-top:8px;font:13px/1.5 {SANS};color:#6b6580;"><b>Fine print:</b> {_e(f.caveat)}</div>
+  <div style="margin-top:8px;font:13px/1.5 {SANS};color:#575170;"><b>Fine print:</b> {_e(f.caveat)}</div>
   {analogy}
 </td></tr></table>"""
 
@@ -108,18 +108,17 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
     banner = (f'<tr><td style="background:{INK};color:{MUSTARD};font:bold 12px/1.5 {SANS};padding:10px 20px;text-align:center;">'
               "⚠ FIXTURE PREVIEW: layout test built from hand-written offline excerpts. "
               "Not live research, not verified quotations. Do not send.</td></tr>") if fixture else ""
-    surprising = [f for f in report.verified if f.surprising] or report.verified[:3]
+    shown = set(dossier.doomers_get_right) | set(dossier.reasons_to_chill)
+    extra = [f for f in report.verified if f.id not in shown]
 
     meter = f"""
 <div style="font:15px/1.6 {FONT};color:{INK};">{_meter(dossier.doom_meter.score)}
 <div style="margin-top:12px;font:bold 34px/1 {SANS};color:{INK};">{dossier.doom_meter.score}/10 · <span style="color:{PINK};">{_e(dossier.doom_meter.label)}</span></div>
 <div style="margin-top:8px;">{_e(dossier.doom_meter.rationale)}</div>
-<div style="margin-top:6px;font:italic 12px {SANS};color:#6b6580;">Highly subjective. Calibrated by vibes and the findings below. Not a forecast. Not a peer-reviewed instrument. Do not cite in court.</div></div>"""
+<div style="margin-top:6px;font:italic 12px {SANS};color:#575170;">Highly subjective. Calibrated by vibes and the findings below. Not a forecast. Not a peer-reviewed instrument. Do not cite in court.</div></div>"""
 
     sections = [
         _section("The Doom Meter™", "📟", MUSTARD, meter, "a deeply unscientific instrument"),
-        _section("Things the Research Actually Says", "🔬", "#9be7e0", _fact_list(surprising, cites),
-                 "surprising findings, real footnotes (details below)"),
         _section("What the Doomers Get Right", "😬", "#ffb3c7",
                  "".join(_finding_card(by_id[i], cites, PINK) for i in dossier.doomers_get_right if i in by_id),
                  "steelmanning the apocalypse"),
@@ -127,11 +126,14 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
                  "".join(_finding_card(by_id[i], cites, TEAL) for i in dossier.reasons_to_chill if i in by_id),
                  "evidence, not vibes"),
     ]
+    if extra:
+        sections.append(_section("Also In The File", "🔬", "#9be7e0", _fact_list(extra, cites),
+                                 "more findings, same receipts"))
     if dossier.adapt:
         items = "".join(
             f'<tr><td valign="top" style="font:bold 20px {SANS};color:{PINK};padding:6px 10px 6px 0;">→</td>'
             f'<td style="font:16px/1.5 {FONT};color:{INK};padding:6px 0;">{_e(a.text)}'
-            f'<sup style="font:11px {SANS};color:#6b6580;">&nbsp;based on {", ".join(_e(i) for i in a.finding_ids)}</sup></td></tr>'
+            f'{"".join(cites.html(by_id[i]) for i in a.finding_ids)}</td></tr>'
             for a in dossier.adapt)
         sections.append(_section("What To Actually Do", "🛠", "#d7c8ff",
                                  f'<table role="presentation" cellpadding="0" cellspacing="0" border="0">{items}</table>',
@@ -143,7 +145,7 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
 
     refs = "".join(
         f'<li style="margin:0 0 8px 0;"><a href="{_e(sources[sid].url)}" style="color:{INK};">{_e(sources[sid].title)}</a>'
-        f' <span style="color:#6b6580;">· {_e(sources[sid].publisher)}{", " + str(sources[sid].year) if sources[sid].year else ""}'
+        f' <span style="color:#575170;">· {_e(sources[sid].publisher)}{", " + str(sources[sid].year) if sources[sid].year else ""}'
         f'{" · fixture excerpt" if sources[sid].backend == "fixture" else ""}</span></li>'
         for sid in cites.order)
     uncert = "".join(f"<li>{_e(u)}</li>" for u in dossier.uncertainties)
@@ -152,10 +154,10 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
 <div style="font:bold 14px {SANS};letter-spacing:2px;">RECEIPTS</div>
 <ol style="padding-left:20px;margin:10px 0 16px 0;">{refs}</ol>
 {f'<div style="font:bold 14px {SANS};letter-spacing:2px;">STILL UNCERTAIN</div><ul style="padding-left:20px;margin:8px 0 16px 0;">{uncert}</ul>' if uncert else ''}
-<div style="color:#6b6580;">Researched and drafted by Agent Lab's Calm Down agent. Every finding above was checked against the text of the source it cites. This email is for perspective, not career, legal or financial advice. Nobody can promise any profession is safe forever, including this email.</div>
+<div style="color:#575170;">Researched and drafted by Agent Lab's Calm Down agent. Every quote above was matched against the text retrieved from the source it cites, and {_e(report.reviewer or "a human reviewer")} approved each claim as a fair reading of its evidence. This email is for perspective, not career, legal or financial advice. Nobody can promise any profession is safe forever, including this email.</div>
 </td></tr>"""
 
-    return f"""<!DOCTYPE html>
+    page = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="x-apple-disable-message-reformatting"><title>{_e(dossier.headline)}</title>
 <style>@media only screen and (max-width:620px){{.wrap{{width:100%!important}}.pad{{padding-left:16px!important;padding-right:16px!important}}.hero{{font-size:52px!important}}}}</style>
@@ -167,7 +169,7 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
 {banner}
 <tr><td class="pad" style="background:{PINK};padding:36px 32px 28px 32px;border-bottom:3px solid {INK};">
   <div style="font:bold 12px {SANS};letter-spacing:3px;color:{INK};">AN URGENT BULLETIN FROM YOUR FAMILY'S DEPARTMENT OF PERSPECTIVE</div>
-  <div class="hero" style="margin-top:10px;font:900 68px/0.95 {SANS};color:#fff;text-shadow:4px 4px 0 {INK};letter-spacing:-2px;">{_e(dossier.headline)}</div>
+  <h1 class="hero" style="margin:10px 0 0 0;font:900 68px/0.95 {SANS};color:#fff;text-shadow:4px 4px 0 {INK};letter-spacing:-2px;">{_e(dossier.headline)}</h1>
   <div style="margin-top:14px;font:bold italic 22px/1.3 {FONT};color:{INK};">{_e(dossier.subtitle)}</div>
 </td></tr>
 <tr><td class="pad" style="padding:26px 32px 4px 32px;font:18px/1.6 {FONT};color:{INK};">{_e(dossier.opening)}</td></tr>
@@ -175,6 +177,7 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
 {footer}
 </table></td></tr></table></body></html>
 """
+    return "\n".join(line.rstrip() for line in page.splitlines()) + "\n"
 
 
 def render_email_text(dossier: CalmDownDossier, report: VerificationReport, sources: dict[str, SourceRecord],
@@ -202,14 +205,16 @@ def render_email_text(dossier: CalmDownDossier, report: VerificationReport, sour
                 out.append(wrap(f"Translation: {f.analogy}", "    "))
         out.append("")
 
-    out.extend(["THINGS THE RESEARCH ACTUALLY SAYS", "---------------------------------"])
-    for n, f in enumerate([f for f in report.verified if f.surprising] or report.verified[:3], 1):
-        out.append(wrap(f"{n}. [{KIND_LABEL[f.evidence_kind]}] {f.claim} {cites.text(f)}"))
-    out.append("")
     block("WHAT THE DOOMERS GET RIGHT", [by_id[i] for i in dossier.doomers_get_right if i in by_id])
     block("REASONS TO CHILL", [by_id[i] for i in dossier.reasons_to_chill if i in by_id])
+    shown = set(dossier.doomers_get_right) | set(dossier.reasons_to_chill)
+    extra = [f for f in report.verified if f.id not in shown]
+    if extra:
+        out.extend(["ALSO IN THE FILE", "----------------"])
+        out.extend(wrap(f"* [{KIND_LABEL[f.evidence_kind]}] {f.claim} {cites.text(f)}") for f in extra)
+        out.append("")
     if dossier.adapt:
-        out += ["WHAT TO ACTUALLY DO", "-------------------"] + [wrap(f"-> {a.text}") for a in dossier.adapt] + [""]
+        out += ["WHAT TO ACTUALLY DO", "-------------------"] + [wrap(f"-> {a.text} " + "".join(cites.text(by_id[i]) for i in a.finding_ids)) for a in dossier.adapt] + [""]
     out += ["THE VERDICT", "-----------", wrap(dossier.verdict), ""]
     if dossier.uncertainties:
         out += ["STILL UNCERTAIN"] + [wrap(f"- {u}") for u in dossier.uncertainties] + [""]
@@ -217,7 +222,9 @@ def render_email_text(dossier: CalmDownDossier, report: VerificationReport, sour
     for n, sid in enumerate(cites.order, 1):
         s = sources[sid]
         out.append(f"[{n}] {s.title}. {s.publisher}{', ' + str(s.year) if s.year else ''}. {s.url}")
-    out += ["", wrap("Researched and drafted by Agent Lab's Calm Down agent. Perspective, not career, legal "
+    out += ["", wrap(f"Quotes were matched against retrieved source text; claims were approved by "
+                     f"{report.reviewer or 'a human reviewer'}."),
+            wrap("Researched and drafted by Agent Lab's Calm Down agent. Perspective, not career, legal "
                      "or financial advice. Nobody can promise any profession is safe forever.")]
     return "\n".join(out) + "\n"
 
@@ -232,7 +239,8 @@ def render_dossier_md(dossier: CalmDownDossier, report: VerificationReport, sour
     md += ["## Run", ""] + [f"- **{k}:** `{v}`" for k, v in run_meta.items()] + [f"- **retrieval mode:** `{mode}`", ""]
     md += ["## Verification outcome", "", f"- **status:** `{report.status}`",
            f"- **verified findings:** {len(report.verified)} of {len(dossier.findings)}",
-           f"- **distinct verified sources:** {len(report.cited_sources)}", ""]
+           f"- **distinct verified works:** {report.distinct_works}",
+           f"- **human support review:** {('approved by ' + report.reviewer) if report.ok else 'pending: ' + ', '.join(report.pending_review) if report.pending_review else 'not reached'}", ""]
     if report.problems:
         md += ["### Blocking problems", ""] + [f"- {p}" for p in report.problems] + [""]
     if report.rejected:

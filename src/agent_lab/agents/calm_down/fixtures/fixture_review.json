@@ -1,0 +1,20 @@
+{
+  "scope": "fixture",
+  "reviewer": "fixture self-review by the authoring agent (not independent; fixture preview only)",
+  "note": "Approves that each fixture claim matches its hand-written fixture quote. It says nothing about whether the fixture text matches the real source. The pipeline refuses this file for live runs.",
+  "approvals": [
+    "281fa83b9a10cbc26a81b7276068a0ea2367a8c2e9f80c6ea52f11d31acbb14d",
+    "db9b6661600c76fe35539006aefdb00dc896084c73751604c0975d9d63b5d2cb",
+    "264301aa35ca238304ec3af613d7b8350ed4fc2b4449794874c537b61cf014ef",
+    "238024ffec6defc4191a6a61e3107aa8e6f72ee359715feac38870c0f62c069a",
+    "10fdb8f28e71523773d2982078aea5b603d10235538fdc0c9a0a62f629cb43e5",
+    "70eb07e3d4ad123e33ed9897ee1c49c755bd8c6c6cceb7935427be35ac5821a0",
+    "1b264a43b141f07c77562517e6151188a5670ac7d34b1791621e3ddd206f5cc2",
+    "fd1497f73f3eb827a9e44e7d7287939cb9b4dd7230b2d2325efb9831e6fcab49",
+    "521de848e678fb26e402affe7f40aa286146c32fe466d83e2814ca3d818b2a98",
+    "69739df4a32d412e1a8294bc840d337e23a3a9579a5eaa3ee6e2423431b440c3",
+    "0f98a638fc49d2ec398cca93320cb0eac8b41cde0f89ff671f1b24f1719d7225",
+    "f728378feca1c229669d95aee570cb36ca98015e4c4e32190500457ab5ef5f93",
+    "98732b861320cb583f52718d00f8febb979caa77d1768b135549e99e1727cd57"
+  ]
+}

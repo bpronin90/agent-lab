@@ -95,11 +95,19 @@ def _calm_down(args, settings: Settings) -> int:
 def _calm_down_finalize(args) -> int:
     from pathlib import Path
 
-    from agent_lab.agents.calm_down.pipeline import finalize_calm_down, fixture_review, load_review
+    from agent_lab.agents.calm_down.pipeline import (
+        finalize_calm_down, fixture_review, invalidate_outputs, load_review,
+    )
 
+    out = Path(args.out)
     try:
         review = fixture_review() if args.review == "fixture" else load_review(Path(args.review))
-        result = finalize_calm_down(Path(args.out), review)
+    except (ValueError, OSError) as exc:
+        invalidate_outputs(out, f"review file unusable: {exc}")
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        result = finalize_calm_down(out, review)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -178,7 +178,7 @@ def load_bundle(out_dir: Path) -> tuple[dict, CalmDownDossier, dict[str, SourceR
     if not path.is_file():
         raise ValueError(f"no bundle.json in {out_dir}; run `agent-lab calm-down` first")
     bundle = json.loads(path.read_text("utf-8"))
-    if bundle.get("format") != BUNDLE_FORMAT or bundle.get("mode") not in ("fixture", "live"):
+    if not isinstance(bundle, dict) or bundle.get("format") != BUNDLE_FORMAT or bundle.get("mode") not in ("fixture", "live"):
         raise ValueError("unsupported or corrupt bundle.json")
     dossier = CalmDownDossier.model_validate(bundle["dossier"])
     fields = {f.name for f in dataclasses.fields(SourceRecord)}
@@ -191,13 +191,30 @@ def load_bundle(out_dir: Path) -> tuple[dict, CalmDownDossier, dict[str, SourceR
     return bundle, dossier, sources
 
 
-def finalize_calm_down(out_dir: Path, review: dict) -> CalmDownResult:
-    """Offline: apply human approvals to the saved bundle and render it. Never calls a model."""
-    bundle, dossier, sources = load_bundle(out_dir)
-    mode: RetrievalMode = bundle["mode"]
-    if mode == "live" and review.get("scope") == "fixture":
-        raise ValueError("a fixture-scoped review cannot approve a live edition; a person must review it")
+def invalidate_outputs(out_dir: Path, reason: str) -> None:
+    """Fail closed on a refused finalize: remove any earlier email and say why.
+    The saved bundle and review request are kept so the person can fix and retry."""
+    if not out_dir.is_dir():
+        return
     clear_generated(out_dir, FINALIZE_FILES)
+    (out_dir / "LIMITATION.md").write_text(
+        "# Calm Down finalization was refused\n\nNo email was produced. Any earlier email in this directory "
+        f"was removed.\n\n- {reason}\n", "utf-8")
+
+
+def finalize_calm_down(out_dir: Path, review: dict) -> CalmDownResult:
+    """Offline: apply human approvals to the saved bundle and render it. Never calls a model.
+    Earlier email outputs are invalidated BEFORE anything can fail."""
+    if out_dir.is_dir():
+        clear_generated(out_dir, FINALIZE_FILES)
+    try:
+        bundle, dossier, sources = load_bundle(out_dir)
+        mode: RetrievalMode = bundle["mode"]
+        if mode == "live" and review.get("scope") == "fixture":
+            raise ValueError("a fixture-scoped review cannot approve a live edition; a person must review it")
+    except (ValueError, OSError, KeyError, TypeError, ValidationError) as exc:
+        invalidate_outputs(out_dir, f"{type(exc).__name__}: {exc}")
+        raise ValueError(str(exc)) from exc
     read = {k: v for k, v in sources.items() if v.read}
     report = verify_dossier(dossier, read, review)
     files: dict[str, Path] = {}

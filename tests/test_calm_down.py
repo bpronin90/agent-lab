@@ -509,3 +509,65 @@ def test_bundle_round_trip_matches_dossier(tmp_path):
     research = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
     _, loaded, sources = load_bundle(tmp_path)
     assert loaded == research.dossier and all(s.read for s in sources.values() if s.text_sha256)
+
+
+# ---------------------------------------------------------------- third review (head 636d2aa)
+
+def _finalized(tmp_path):
+    review = _approved(tmp_path)
+    review_path = tmp_path.parent / f"{tmp_path.name}-review.json"
+    review_path.write_text(json.dumps(review))
+    assert finalize_calm_down(tmp_path, review).ok and (tmp_path / "email.html").exists()
+    return review_path
+
+
+def _assert_refused_cleanly(tmp_path):
+    assert not (tmp_path / "email.html").exists() and not (tmp_path / "email.txt").exists()
+    assert "refused" in (tmp_path / "LIMITATION.md").read_text()
+
+
+def test_success_then_digest_failure_removes_stale_email(tmp_path):
+    review_path = _finalized(tmp_path)
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    next(s for s in bundle["sources"] if s["read"])["text"] += " unexpected edit"
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
+    assert main(["calm-down-finalize", str(tmp_path), "--review", str(review_path)]) == 2
+    _assert_refused_cleanly(tmp_path)
+    assert (tmp_path / "bundle.json").exists() and (tmp_path / "review-request.json").exists()
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt", "wrong-format"])
+def test_success_then_bad_bundle_removes_stale_email(tmp_path, damage):
+    review_path = _finalized(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    if damage == "missing":
+        bundle_path.unlink()
+    elif damage == "corrupt":
+        bundle_path.write_text("{not json")
+    else:
+        bundle_path.write_text(json.dumps({"format": "other"}))
+    assert main(["calm-down-finalize", str(tmp_path), "--review", str(review_path)]) == 2
+    _assert_refused_cleanly(tmp_path)
+
+
+def test_success_then_unusable_review_removes_stale_email(tmp_path):
+    _finalized(tmp_path)
+    assert main(["calm-down-finalize", str(tmp_path), "--review", str(tmp_path / "nope.json")]) == 2
+    _assert_refused_cleanly(tmp_path)
+
+
+def test_success_then_fixture_review_on_live_bundle_removes_stale_email(tmp_path):
+    _finalized(tmp_path)
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    bundle["mode"] = "live"
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
+    with pytest.raises(ValueError, match="fixture-scoped"):
+        finalize_calm_down(tmp_path, fixture_review())
+    _assert_refused_cleanly(tmp_path)
+
+
+def test_finalize_into_missing_directory_creates_nothing(tmp_path):
+    target = tmp_path / "absent"
+    with pytest.raises(ValueError):
+        finalize_calm_down(target, fixture_review())
+    assert not target.exists()

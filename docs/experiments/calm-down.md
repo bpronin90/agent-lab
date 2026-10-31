@@ -12,12 +12,19 @@ First edition: **CALM DOWN.** *The Robots Are Not Taking Your Law Degree.*
 ## How it works
 
 ```
-fear ──► runtime.run_agent("calm_down")  (same bounds, retries, error classes, RunRecord)
-           │  tools: search_sources · read_source · fetch_url   (ResearchSession records provenance)
-           ▼
-       CalmDownDossier (Pydantic)  ──► verify_dossier()  ──► complete?  ──► email.html + email.txt
-                                                         └─ insufficient ─► LIMITATION.md (no email)
-       research-dossier.md + sources.json are always written
+research   agent-lab calm-down "<fear>" --out DIR
+  fear ──► runtime.run_agent("calm_down")  (same bounds, retries, error classes, RunRecord)
+             │  tools: search_sources · read_source · fetch_url   (ResearchSession records provenance)
+             ▼
+         CalmDownDossier ──► mechanical verify ──► insufficient ─► LIMITATION.md (exit 4)
+                                              └─► needs_review ─► bundle.json + review-request.json (exit 5)
+                                                                   (never an email)
+human      a person checks review-request.json and writes review.json (approved hashes)
+
+finalize   agent-lab calm-down-finalize DIR --review review.json      (offline: no model, no network)
+  bundle.json ──► digest check ──► verify + approvals ──► complete ─► email.html + email.txt (exit 0)
+                       │                              └─► still pending/insufficient ─► LIMITATION.md
+                       └─ refused bundle or review ─► earlier email removed, LIMITATION.md (exit 2)
 ```
 
 | File | Role |

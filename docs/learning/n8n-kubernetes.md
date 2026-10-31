@@ -157,7 +157,10 @@ effect.
 **Untrusted input.** The scenario chooses from a fixed table in the Validate node,
 and n8n never passes through an image, env, or deadline. The prompt is
 length-checked, rejected if it contains control characters, and placed in a single
-argv element after `--`. No shell ever runs it. The `--` matters: before it,
+argv element after `--`. No shell ever runs it. Kubernetes expands `$(VAR)` in container `args`, so the Build Job manifest node
+doubles every `$` in a run of `$` that precedes `(` (`$$` is Kubernetes' escape for a
+literal `$`). Without this, a prompt of `$(AGENT_LAB_PROVIDER)` reached the agent as
+`mock`. The `--` matters: before it,
 `agent-lab run "--help"` printed the CLI help, because argparse read the prompt as
 a flag. The admission policy requires the `--` too, so a modified workflow cannot
 drop it.

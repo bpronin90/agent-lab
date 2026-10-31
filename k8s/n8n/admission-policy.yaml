@@ -1,0 +1,82 @@
+# RBAC decides WHO may create Jobs. This policy decides WHAT those Jobs may
+# contain. It applies only to the n8n ServiceAccount, so a prompt or a
+# compromised n8n workflow cannot swap the image, add a shell command, read a
+# secret, mount the host, or run without a deadline.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: agent-lab-n8n-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+  matchConditions:
+    - name: n8n-service-account-only
+      expression: request.userInfo.username == "system:serviceaccount:agent-lab:n8n-job-runner"
+  variables:
+    - name: pod
+      expression: object.spec.template.spec
+  validations:
+    - expression: >-
+        size(variables.pod.containers) == 1 &&
+        variables.pod.containers[0].image == "agent-lab:dev" &&
+        !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers)
+      message: "only a single agent-lab:dev container is allowed"
+    - expression: >-
+        !has(variables.pod.containers[0].command) &&
+        has(variables.pod.containers[0].args) &&
+        size(variables.pod.containers[0].args) == 3 &&
+        variables.pod.containers[0].args[0] == "run" &&
+        variables.pod.containers[0].args[1] == "--" &&
+        size(variables.pod.containers[0].args[2]) <= 500
+      message: "args must be exactly [run, --, <prompt up to 500 chars>]"
+    - expression: >-
+        !has(variables.pod.containers[0].env) ||
+        variables.pod.containers[0].env.all(e, !has(e.valueFrom) &&
+          e.name in ["AGENT_LAB_MAX_REQUESTS", "AGENT_LAB_MAX_TOOL_CALLS", "AGENT_LAB_DEADLINE_SECONDS"])
+      message: "only usage-limit env overrides are allowed"
+    - expression: >-
+        !has(variables.pod.containers[0].envFrom) ||
+        variables.pod.containers[0].envFrom.all(s, !has(s.secretRef) &&
+          has(s.configMapRef) && s.configMapRef.name == "agent-lab-config")
+      message: "envFrom may only reference the agent-lab-config ConfigMap"
+    - expression: >-
+        has(variables.pod.automountServiceAccountToken) &&
+        variables.pod.automountServiceAccountToken == false &&
+        (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == "default")
+      message: "Job pods must run as the default ServiceAccount without a token"
+    # Pod Security "restricted" also blocks these, but only when the Job
+    # controller creates the pod. Rejecting the Job gives n8n an immediate error.
+    - expression: >-
+        has(variables.pod.containers[0].securityContext) &&
+        has(variables.pod.containers[0].securityContext.allowPrivilegeEscalation) &&
+        variables.pod.containers[0].securityContext.allowPrivilegeEscalation == false &&
+        (!has(variables.pod.containers[0].securityContext.privileged) ||
+          variables.pod.containers[0].securityContext.privileged == false) &&
+        !has(variables.pod.hostNetwork) && !has(variables.pod.hostPID) && !has(variables.pod.hostIPC)
+      message: "Job pods must not be privileged or share host namespaces"
+    - expression: >-
+        !has(variables.pod.volumes) ||
+        variables.pod.volumes.all(v, has(v.emptyDir) ||
+          (has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == "agent-lab-runs"))
+      message: "only emptyDir and the agent-lab-runs PVC may be mounted"
+    - expression: >-
+        has(object.spec.activeDeadlineSeconds) && object.spec.activeDeadlineSeconds <= 300 &&
+        has(object.spec.backoffLimit) && object.spec.backoffLimit <= 1
+      message: "Jobs need activeDeadlineSeconds <= 300 and backoffLimit <= 1"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: agent-lab-n8n-jobs
+spec:
+  policyName: agent-lab-n8n-jobs
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: agent-lab

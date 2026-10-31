@@ -1,0 +1,501 @@
+{
+  "id": "AgLabK8sJobRun01",
+  "name": "Agent Lab — Run k8s Job",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "prompt"
+            },
+            {
+              "name": "scenario"
+            }
+          ]
+        }
+      },
+      "name": "When called by experiment",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Workflow inputs are untrusted. The scenario picks one of a fixed set of\n// server-side settings; the prompt only ever becomes one argv element.\nconst SCENARIOS = {\n  success: { env: [], activeDeadlineSeconds: 120 },\n  // Deterministic failure: the agent needs 2 model requests when it calls a tool.\n  limit: { env: [{ name: 'AGENT_LAB_MAX_REQUESTS', value: '1' }], activeDeadlineSeconds: 120 },\n  // Controlled deadline: Kubernetes kills the Job after 1 second.\n  timeout: { env: [], activeDeadlineSeconds: 1 },\n};\nconst scenario = String($json.scenario ?? '');\nif (!Object.hasOwn(SCENARIOS, scenario)) {\n  throw new Error(`Rejected input: unknown scenario ${JSON.stringify(scenario.slice(0, 40))}`);\n}\nconst prompt = String($json.prompt ?? '').trim();\nif (prompt.length === 0 || prompt.length > 500) {\n  throw new Error('Rejected input: prompt must be 1-500 characters');\n}\nif (/[\\u0000-\\u001f\\u007f]/.test(prompt)) {\n  throw new Error('Rejected input: prompt contains control characters');\n}\nreturn [{ json: { scenario, prompt, ...SCENARIOS[scenario] } }];"
+      },
+      "name": "Validate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Same pod shape as k8s/cronjob.yaml. admission-policy.yaml rejects anything else.\nconst { scenario, prompt, env, activeDeadlineSeconds } = $json;\nconst job = {\n  apiVersion: 'batch/v1',\n  kind: 'Job',\n  metadata: {\n    generateName: 'agent-lab-n8n-',\n    labels: {\n      'app.kubernetes.io/name': 'agent-lab',\n      'app.kubernetes.io/managed-by': 'n8n',\n      'agent-lab/scenario': scenario,\n      'agent-lab/n8n-execution': String($execution.id).replace(/[^A-Za-z0-9]/g, '').slice(0, 63) || 'unknown',\n    },\n  },\n  spec: {\n    backoffLimit: 0, // agent failures are deterministic; the runtime owns retries\n    activeDeadlineSeconds,\n    ttlSecondsAfterFinished: 3600,\n    template: {\n      spec: {\n        restartPolicy: 'Never',\n        automountServiceAccountToken: false,\n        securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001, seccompProfile: { type: 'RuntimeDefault' } },\n        containers: [{\n          name: 'agent',\n          image: 'agent-lab:dev',\n          imagePullPolicy: 'IfNotPresent',\n          args: ['run', '--', prompt], // `--` stops the CLI reading the prompt as flags\n          env,\n          envFrom: [{ configMapRef: { name: 'agent-lab-config' } }],\n          resources: { requests: { cpu: '50m', memory: '128Mi' }, limits: { cpu: '500m', memory: '256Mi' } },\n          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } },\n          volumeMounts: [{ name: 'runs', mountPath: '/data/runs' }, { name: 'tmp', mountPath: '/tmp' }],\n        }],\n        volumes: [\n          { name: 'runs', persistentVolumeClaim: { claimName: 'agent-lab-runs' } },\n          { name: 'tmp', emptyDir: {} },\n        ],\n      },\n    },\n  },\n};\nreturn [{ json: { job } }];"
+      },
+      "name": "Build Job manifest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://k3d-agent-lab-n8n-server-0:6443/apis/batch/v1/namespaces/agent-lab/jobs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "provideSslCertificates": true,
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.job) }}"
+      },
+      "name": "Create Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "AgLabK8sTokenCr1",
+          "name": "Agent Lab k8s token (n8n-job-runner)"
+        },
+        "httpSslAuth": {
+          "id": "AgLabK8sCACert01",
+          "name": "Agent Lab k3d cluster CA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate input').first().json;\nreturn [{ json: {\n  scenario: input.scenario,\n  prompt: input.prompt,\n  jobName: $json.metadata.name, // assigned by Kubernetes from generateName\n  jobUid: $json.metadata.uid,\n  submittedAt: new Date().toISOString(),\n  startedMs: Date.now(),\n  pollDeadlineSeconds: 90, // n8n's own deadline, independent of the Job's\n  polls: 0,\n} }];"
+      },
+      "name": "Track job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "name": "Wait 2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        0
+      ],
+      "webhookId": "5b0f8c1e-2f4a-4d7e-9a61-8c3e0d1a4b21"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://k3d-agent-lab-n8n-server-0:6443/apis/batch/v1/namespaces/agent-lab/jobs/{{ $json.jobName }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "provideSslCertificates": true,
+        "options": {}
+      },
+      "name": "Get Job status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "AgLabK8sTokenCr1",
+          "name": "Agent Lab k8s token (n8n-job-runner)"
+        },
+        "httpSslAuth": {
+          "id": "AgLabK8sCACert01",
+          "name": "Agent Lab k3d cluster CA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const tracked = $('Track job').first().json;\nconst status = $json.status ?? {};\nconst done = (status.conditions ?? []).find(\n  (c) => (c.type === 'Complete' || c.type === 'Failed') && c.status === 'True');\nconst elapsedSeconds = Math.round((Date.now() - tracked.startedMs) / 100) / 10;\nlet phase = 'running';\nif (done) phase = done.type === 'Complete' ? 'succeeded' : 'failed';\nelse if (elapsedSeconds > tracked.pollDeadlineSeconds) phase = 'n8n_gave_up';\nreturn [{ json: {\n  ...tracked,\n  polls: $runIndex + 1,\n  phase,\n  reason: done?.reason ?? null,\n  message: done?.message ?? null,\n  elapsedSeconds,\n  active: status.active ?? 0,\n  succeededPods: status.succeeded ?? 0,\n  failedPods: status.failed ?? 0,\n} }];"
+      },
+      "name": "Evaluate status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.phase }}",
+              "rightValue": "running",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Still running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.phase }}",
+              "rightValue": "n8n_gave_up",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "n8n gave up?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://k3d-agent-lab-n8n-server-0:6443/apis/batch/v1/namespaces/agent-lab/jobs/{{ $json.jobName }}?propagationPolicy=Background",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "provideSslCertificates": true,
+        "options": {}
+      },
+      "name": "Delete Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        100
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "AgLabK8sTokenCr1",
+          "name": "Agent Lab k8s token (n8n-job-runner)"
+        },
+        "httpSslAuth": {
+          "id": "AgLabK8sCACert01",
+          "name": "Agent Lab k3d cluster CA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://k3d-agent-lab-n8n-server-0:6443/api/v1/namespaces/agent-lab/pods?labelSelector={{ encodeURIComponent('batch.kubernetes.io/job-name=' + $('Evaluate status').last().json.jobName) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "provideSslCertificates": true,
+        "options": {}
+      },
+      "name": "List Job pods",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        200
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "AgLabK8sTokenCr1",
+          "name": "Agent Lab k8s token (n8n-job-runner)"
+        },
+        "httpSslAuth": {
+          "id": "AgLabK8sCACert01",
+          "name": "Agent Lab k3d cluster CA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pods = ($json.items ?? []).sort((a, b) =>\n  a.metadata.creationTimestamp.localeCompare(b.metadata.creationTimestamp));\nconst pod = pods.at(-1);\nconst terminated = pod?.status?.containerStatuses?.[0]?.state?.terminated;\nreturn [{ json: {\n  podName: pod?.metadata?.name ?? 'none',\n  podPhase: pod?.status?.phase ?? null,\n  exitCode: terminated?.exitCode ?? null,\n  terminationReason: terminated?.reason ?? null,\n} }];"
+      },
+      "name": "Pick pod",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://k3d-agent-lab-n8n-server-0:6443/api/v1/namespaces/agent-lab/pods/{{ $json.podName }}/log?container=agent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "provideSslCertificates": true,
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "log"
+            }
+          }
+        }
+      },
+      "name": "Get agent log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        200
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "AgLabK8sTokenCr1",
+          "name": "Agent Lab k8s token (n8n-job-runner)"
+        },
+        "httpSslAuth": {
+          "id": "AgLabK8sCACert01",
+          "name": "Agent Lab k3d cluster CA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $('Evaluate status').last().json;\nconst pod = $('Pick pod').first().json;\nlet record = null;\nlet logNote = null;\nif ($json.error) logNote = `log unavailable: ${$json.error.message ?? JSON.stringify($json.error)}`;\nelse {\n  try { record = JSON.parse($json.log); } catch { logNote = `log was not a run record: ${String($json.log ?? '').slice(0, 200)}`; }\n}\nlet outcome;\nif (job.phase === 'succeeded' && record?.status === 'succeeded') outcome = 'SUCCESS';\nelse if (job.reason === 'DeadlineExceeded') outcome = 'TIMEOUT (Kubernetes activeDeadlineSeconds)';\nelse if (job.phase === 'n8n_gave_up') outcome = 'TIMEOUT (n8n stopped waiting and deleted the Job)';\nelse if (record?.status === 'failed') outcome = `FAILED (agent error_class=${record.error_class})`;\nelse outcome = `FAILED (${job.reason ?? 'unknown'})`;\nreturn [{ json: {\n  outcome,\n  scenario: job.scenario,\n  prompt: job.prompt,\n  job: { name: job.jobName, uid: job.jobUid, phase: job.phase, reason: job.reason, message: job.message,\n         submittedAt: job.submittedAt, elapsedSeconds: job.elapsedSeconds, polls: job.polls },\n  pod,\n  agent: record && {\n    run_id: record.run_id, status: record.status, error_class: record.error_class ?? null,\n    error: record.error ?? null, output: record.output ?? null, tools_used: record.tools_used,\n    requests: record.requests, model: record.model, git_sha: record.git_sha, config_hash: record.config_hash,\n  },\n  logNote,\n} }];"
+      },
+      "name": "Build report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "When called by experiment": {
+      "main": [
+        [
+          {
+            "node": "Validate input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate input": {
+      "main": [
+        [
+          {
+            "node": "Build Job manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Job manifest": {
+      "main": [
+        [
+          {
+            "node": "Create Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Job": {
+      "main": [
+        [
+          {
+            "node": "Track job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Track job": {
+      "main": [
+        [
+          {
+            "node": "Wait 2s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2s": {
+      "main": [
+        [
+          {
+            "node": "Get Job status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate status": {
+      "main": [
+        [
+          {
+            "node": "Still running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still running?": {
+      "main": [
+        [
+          {
+            "node": "Wait 2s",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "n8n gave up?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "n8n gave up?": {
+      "main": [
+        [
+          {
+            "node": "Delete Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Job pods",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Job": {
+      "main": [
+        [
+          {
+            "node": "List Job pods",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Job pods": {
+      "main": [
+        [
+          {
+            "node": "Pick pod",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick pod": {
+      "main": [
+        [
+          {
+            "node": "Get agent log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get agent log": {
+      "main": [
+        [
+          {
+            "node": "Build report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "tags": []
+}

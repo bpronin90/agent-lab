@@ -1,0 +1,11 @@
+# Experiment 2: lets n8n launch demo-agent Jobs. Apply after the base:
+#   kubectl apply -k k8s/ && kubectl apply -f k8s/n8n/
+# Pod Security "restricted" rejects privileged, root, hostPath, or
+# capability-adding pods in this namespace no matter who creates them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-lab
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

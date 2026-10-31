@@ -154,6 +154,7 @@ but the `GEMINI_API_KEY` secret is missing, the job fails fast. Nothing is writt
 - [docs/learning/docker.md](docs/learning/docker.md) explains every Docker concept used here.
 - [docs/learning/kubernetes.md](docs/learning/kubernetes.md) does the same for Kubernetes, K3s and k3d.
 - [docs/learning/exercises.md](docs/learning/exercises.md) has hands-on exercises with expected results.
+- [docs/learning/n8n-kubernetes.md](docs/learning/n8n-kubernetes.md) has n8n submit, monitor, and collect agent Kubernetes Jobs (Experiment 2).
 
 ## Other docs
 

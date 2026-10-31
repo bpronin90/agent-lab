@@ -7,8 +7,8 @@
     "lawyers sanctions chatgpt hallucination court liability",
     "history automation jobs atm bank tellers complements",
     "regulation ethics lawyers competence accountability",
-    "knowledge workers consultants productivity experiment frontier",
-    "accountants auditors employment projection outlook"
+    "accountants auditors employment projection outlook",
+    "knowledge workers consultants productivity experiment frontier"
   ],
   "sources": [
     {
@@ -20,7 +20,7 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "b8cf90783ead75019354f195cca31a51001d2b58a5d9343046c6d92ef77122d9",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -33,7 +33,7 @@
       "tier": "secondary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "52bd954e780b7a00adf8f5d90c9ffe1190587a126798335de29f386a50ed0d1d",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -46,7 +46,7 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "f4f3044dfa188e3096feb467cde710d79526c3918e9ad58178c7b91986b9e908",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -59,7 +59,7 @@
       "tier": "secondary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "89c743de160cf4f816a51fef27c71c175d78c7c1bde48708713768077df4e3e6",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -72,7 +72,7 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "87a5f18a58112ef5c816f19975ed7dc5e0f887ffd773132ed527a4da2d47076b",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -85,7 +85,7 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "8f5b0b9c591625ba350e471cd72acd63487dbcf54ed057c9b743ae5cc19c28f0",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -98,7 +98,7 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "7ff049c348d866ffff45a3e4c0678cd121b4995517f44b1434dcea30f916d2f1",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -111,8 +111,21 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "2f587278e3f5a380048e0cb0e843df60b873dbb93754effe9bf57679ed926d41",
+      "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
+    },
+    {
+      "source_id": "S8",
+      "title": "Why Are There Still So Many Jobs? The History and Future of Workplace Automation",
+      "url": "https://www.aeaweb.org/articles?id=10.1257/jep.29.3.3",
+      "publisher": "Journal of Economic Perspectives 29(3) (Autor)",
+      "year": 2015,
+      "tier": "primary",
+      "backend": "fixture",
+      "read": true,
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
+      "text_sha256": "cf58ef477842901607b3801a052ec8f5ee560942c84bf56f76d538d3d1797f88",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
     {
@@ -124,7 +137,7 @@
       "tier": "secondary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "7d83b3e7cb8f7e80617635e45b9cb4bca8c719b6da40c01756a691228a99107c",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
@@ -137,21 +150,8 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "bcba2d46a73f77cab3c49de5de3a39b5153835c374eb9c2ee933480978238bf8",
-      "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
-    },
-    {
-      "source_id": "S8",
-      "title": "Why Are There Still So Many Jobs? The History and Future of Workplace Automation",
-      "url": "https://www.aeaweb.org/articles?id=10.1257/jep.29.3.3",
-      "publisher": "Journal of Economic Perspectives 29(3) (Autor)",
-      "year": 2015,
-      "tier": "primary",
-      "backend": "fixture",
-      "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
-      "text_sha256": "cf58ef477842901607b3801a052ec8f5ee560942c84bf56f76d538d3d1797f88",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     },
     {
@@ -163,7 +163,7 @@
       "tier": "primary",
       "backend": "fixture",
       "read": true,
-      "retrieved_at": "2026-10-31T20:08:20+00:00",
+      "retrieved_at": "2026-10-31T20:23:18+00:00",
       "text_sha256": "e44533ae146bc53f2d311f5c018fd12c483ee05f04d2f6de74974dc01088af55",
       "fixture_note": "OFFLINE FIXTURE. This excerpt was written by hand for Agent Lab's tests. It paraphrases a real public source from memory and is not a verified quotation. Check the linked source before relying on any number."
     }

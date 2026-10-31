@@ -1,0 +1,312 @@
+{
+  "instructions": "For each item, confirm the claim is fairly supported by the quote and source (population, outcome, direction, and quantitative context). Copy the hash of each item you approve into review.json under approvals, with your name as reviewer.",
+  "findings": [
+    {
+      "id": "F1",
+      "hash": "f0cb3492ab39c29fb51a39a9efc883fc31ffb817f0502a466a59ba335cfc2d74",
+      "claim": "Most U.S. workers have some tasks exposed to large language models, and about one in five could see at least half of their tasks affected.",
+      "evidence_quote": "around 80% of the U.S. workforce could have at least 10% of their work tasks affected by the introduction of LLMs, while approximately 19% of workers may see at least 50% of their tasks impacted",
+      "stance": "supports_fear",
+      "kind": "forecast",
+      "confidence": "medium",
+      "surprising": true,
+      "caveat": "This measures task exposure, not job loss. The authors say it does not predict whether jobs are eliminated or how fast adoption happens.",
+      "analogy": "Exposure is like saying a lot of your kitchen could be affected by a microwave. True! You still did not fire the chef.",
+      "sources": [
+        {
+          "id": "S1",
+          "title": "GPTs are GPTs: An Early Look at the Labor Market Impact Potential of Large Language Models",
+          "url": "https://arxiv.org/abs/2303.10130",
+          "text_sha256": "b8cf90783ead75019354f195cca31a51001d2b58a5d9343046c6d92ef77122d9",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F2",
+      "hash": "3c20de1bfaf7f8f96c26a9983e3936b159d7f39b56afb75a0844420e9e272a85",
+      "claim": "Early-career workers in the most AI-exposed occupations have already lost ground in employment relative to others.",
+      "evidence_quote": "early-career workers (ages 22-25) in the most AI-exposed occupations have experienced a 13 percent relative decline in employment",
+      "stance": "supports_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "medium",
+      "surprising": true,
+      "caveat": "This is a relative decline in payroll data, and it is early evidence. Experienced workers in the same jobs held steady or grew.",
+      "analogy": "The robots did not storm the partners' offices. They quietly took the intern's stapler.",
+      "sources": [
+        {
+          "id": "S4",
+          "title": "Canaries in the Coal Mine? Six Facts about the Recent Employment Effects of Artificial Intelligence",
+          "url": "https://digitaleconomy.stanford.edu/publications/canaries-in-the-coal-mine/",
+          "text_sha256": "8f5b0b9c591625ba350e471cd72acd63487dbcf54ed057c9b743ae5cc19c28f0",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F3",
+      "hash": "7923759adc41f1f0b42e9ef25d1dffa8caf46189eb23f68f1e0140f181191cda",
+      "claim": "A major bank forecast that a large share of legal tasks could be automated.",
+      "evidence_quote": "We estimate that 44% of tasks in legal professions could be automated.",
+      "stance": "supports_fear",
+      "kind": "forecast",
+      "confidence": "low",
+      "surprising": false,
+      "caveat": "This is a model-based estimate from an investment bank, not a measurement. The same report says most exposed jobs are more likely to be complemented than substituted.",
+      "analogy": null,
+      "sources": [
+        {
+          "id": "S11",
+          "title": "The Potentially Large Effects of Artificial Intelligence on Economic Growth",
+          "url": "https://www.gspublishing.com/content/research/en/reports/2023/03/27/d64e052b-0f6e-45d7-967b-d7be35fabd16.html",
+          "text_sha256": "52bd954e780b7a00adf8f5d90c9ffe1190587a126798335de29f386a50ed0d1d",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F4",
+      "hash": "989db2a3acfc44e6a07c3b95006228cacfbd2895754e0a1f482a66fc176a0484",
+      "claim": "Despite widespread adoption, AI chatbots showed no significant effect on earnings or recorded hours in any occupation studied.",
+      "evidence_quote": "AI chatbots have had no significant impact on earnings or recorded hours in any occupation",
+      "stance": "challenges_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "medium",
+      "surprising": true,
+      "caveat": "This covers one country (Denmark) and an early adoption period. Effects could grow as tools improve.",
+      "analogy": "Everyone bought the fancy air fryer. Dinner, statistically speaking, is the same dinner.",
+      "sources": [
+        {
+          "id": "S3",
+          "title": "Large Language Models, Small Labor Market Effects",
+          "url": "https://www.nber.org/papers/w33777",
+          "text_sha256": "2f587278e3f5a380048e0cb0e843df60b873dbb93754effe9bf57679ed926d41",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F5",
+      "hash": "ec7301160498ec54cb9909ebda247374ff9a0866b5d1b8ee929ac10241be1e3d",
+      "claim": "A federal court sanctioned lawyers who filed a brief citing judicial opinions that did not exist, which had been generated by ChatGPT.",
+      "evidence_quote": "the court sanctioned two lawyers and their firm, imposing a $5,000 penalty, after they submitted a brief citing judicial opinions that did not exist and had been generated by ChatGPT",
+      "stance": "challenges_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "high",
+      "surprising": false,
+      "caveat": "One case. It shows accountability lands on humans. It does not show that AI tools are useless in legal work.",
+      "analogy": "You can let the GPS pick the route. If you drive into the lake, the judge still talks to you, not the GPS.",
+      "sources": [
+        {
+          "id": "S5",
+          "title": "Mata v. Avianca, Inc.",
+          "url": "https://en.wikipedia.org/wiki/Mata_v._Avianca,_Inc.",
+          "text_sha256": "7d83b3e7cb8f7e80617635e45b9cb4bca8c719b6da40c01756a691228a99107c",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F6",
+      "hash": "e43415379adc73bc4fe565e9b3245b529460bc825e5a37c27a9375f454595526",
+      "claim": "General-purpose models hallucinated badly when asked verifiable questions about federal court cases.",
+      "evidence_quote": "legal hallucinations are alarmingly prevalent, occurring between 69% of the time with ChatGPT 3.5 and 88% with Llama 2",
+      "stance": "challenges_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "medium",
+      "surprising": true,
+      "caveat": "These are older, general models, not specialized legal tools, and newer systems may do better. The point is that verification is still a human job.",
+      "analogy": "Imagine a paralegal who is brilliant, tireless, and confidently invents a Supreme Court case before lunch.",
+      "sources": [
+        {
+          "id": "S6",
+          "title": "Large Legal Fictions: Profiling Legal Hallucinations in Large Language Models",
+          "url": "https://arxiv.org/abs/2401.01301v1",
+          "text_sha256": "bcba2d46a73f77cab3c49de5de3a39b5153835c374eb9c2ee933480978238bf8",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F7",
+      "hash": "9b4f3ce71da2567f2492ba89588a376d5a44a60dce8112ccc9a64ee67188c514",
+      "claim": "In a field experiment, consultants using AI on a task outside the AI's abilities were less likely to get it right than consultants without AI.",
+      "evidence_quote": "For a task selected to be outside the frontier, consultants using AI were 19 percentage points less likely to produce correct solutions than those without AI.",
+      "stance": "mixed",
+      "kind": "demonstrated_fact",
+      "confidence": "medium",
+      "surprising": true,
+      "caveat": "These were consultants, not lawyers or accountants. But the pattern of unevenness is the professional-judgment problem in miniature.",
+      "analogy": "The AI is a power drill. Great for holes. Terrible for brain surgery. Knowing which job you are doing is the job.",
+      "sources": [
+        {
+          "id": "S7",
+          "title": "Navigating the Jagged Technological Frontier: Field Experimental Evidence of the Effects of AI on Knowledge Worker Productivity and Quality",
+          "url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4573321",
+          "text_sha256": "e44533ae146bc53f2d311f5c018fd12c483ee05f04d2f6de74974dc01088af55",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F8",
+      "hash": "37ac130531da4182cf9b83d4d4ae1804324e30ab1b166fe04ddc348c332c03fa",
+      "claim": "In a large workplace study, a generative AI assistant raised productivity, mostly for less-experienced workers.",
+      "evidence_quote": "Access to the tool increases productivity, as measured by issues resolved per hour, by 14 percent on average, with the greatest impact on novice and low-skilled workers",
+      "stance": "challenges_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "medium",
+      "surprising": false,
+      "caveat": "This was customer support, not law or accounting. Productivity gains can still reduce hiring.",
+      "analogy": null,
+      "sources": [
+        {
+          "id": "S2",
+          "title": "Generative AI at Work",
+          "url": "https://www.nber.org/papers/w31161",
+          "text_sha256": "7ff049c348d866ffff45a3e4c0678cd121b4995517f44b1434dcea30f916d2f1",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F9",
+      "hash": "c7a01ae9096461b9a3eb7373d0263fa27469e81c64ed8ce6aaa4467680dcabc9",
+      "claim": "An economist's review of workplace automation finds it also complements labor and can raise demand for it.",
+      "evidence_quote": "automation also complements labor, raises output in ways that lead to higher demand for labor, and interacts with adjustments in labor supply",
+      "stance": "challenges_fear",
+      "kind": "speculation",
+      "confidence": "medium",
+      "surprising": false,
+      "caveat": "This is an economist's synthesis of history. Generative AI may not follow past patterns.",
+      "analogy": null,
+      "sources": [
+        {
+          "id": "S8",
+          "title": "Why Are There Still So Many Jobs? The History and Future of Workplace Automation",
+          "url": "https://www.aeaweb.org/articles?id=10.1257/jep.29.3.3",
+          "text_sha256": "cf58ef477842901607b3801a052ec8f5ee560942c84bf56f76d538d3d1797f88",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F10",
+      "hash": "bbf6d0e86573081326d699c7806a6b559f6544a79409f3ae8f43bd9de2563a49",
+      "claim": "After ATMs were widely deployed, the number of full-time-equivalent bank tellers grew.",
+      "evidence_quote": "Since ATMs were widely deployed, the number of full-time-equivalent bank tellers has grown.",
+      "stance": "challenges_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "medium",
+      "surprising": true,
+      "caveat": "Teller employment later declined as mobile banking spread. Disruption delayed is still disruption.",
+      "analogy": "The cash robot arrived, and the humans got promoted to 'person you talk to about your mortgage.' Then the phone app showed up. Plot twist.",
+      "sources": [
+        {
+          "id": "S9",
+          "title": "Toil and Technology",
+          "url": "https://www.imf.org/external/pubs/ft/fandd/2015/03/bessen.htm",
+          "text_sha256": "89c743de160cf4f816a51fef27c71c175d78c7c1bde48708713768077df4e3e6",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "hash": "3a518f02613445f7bd18bbe034b5516058c357776ea9325828ebfa827c2cb24f",
+      "claim": "The American Bar Association says lawyers using generative AI must consider their ethical duties, including competence and protecting client information.",
+      "evidence_quote": "Lawyers using generative artificial intelligence tools must fully consider their applicable ethical obligations, including their duties to provide competent legal representation, to protect client information",
+      "stance": "challenges_fear",
+      "kind": "demonstrated_fact",
+      "confidence": "high",
+      "surprising": false,
+      "caveat": "Ethics rules shape how AI is used. They do not by themselves protect headcount, and this release is guidance, not a statute.",
+      "analogy": "The robot can draft the contract. The robot cannot be disbarred, which, from a client's point of view, is a bug.",
+      "sources": [
+        {
+          "id": "S10",
+          "title": "ABA issues first ethics guidance on a lawyer's use of AI tools (Formal Opinion 512)",
+          "url": "https://www.americanbar.org/news/abanews/aba-news-archives/2024/07/aba-issues-first-ethics-guidance-ai-tools/",
+          "text_sha256": "87a5f18a58112ef5c816f19975ed7dc5e0f887ffd773132ed527a4da2d47076b",
+          "backend": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "hash": "c5b9ceba115dfb849e6068fc46bd7c9f98913ea2e03d56d409ae79b1757c1eab",
+      "claim": "U.S. government projections still expect accountant and auditor employment to grow over the decade.",
+      "evidence_quote": "Employment of accountants and auditors is projected to grow 6 percent from 2023 to 2033, faster than the average for all occupations.",
+      "stance": "challenges_fear",
+      "kind": "forecast",
+      "confidence": "medium",
+      "surprising": false,
+      "caveat": "BLS projections are not designed to anticipate rapid technology shocks and can be wrong.",
+      "analogy": null,
+      "sources": [
+        {
+          "id": "S12",
+          "title": "Accountants and Auditors: Occupational Outlook Handbook",
+          "url": "https://www.bls.gov/ooh/business-and-financial/accountants-and-auditors.htm",
+          "text_sha256": "f4f3044dfa188e3096feb467cde710d79526c3918e9ad58178c7b91986b9e908",
+          "backend": "fixture"
+        }
+      ]
+    }
+  ],
+  "editorial": {
+    "hash": "98732b861320cb583f52718d00f8febb979caa77d1768b135549e99e1727cd57",
+    "texts": {
+      "headline": "CALM DOWN.",
+      "subtitle": "The Robots Are Not Taking Your Law Degree.",
+      "opening": "Cousin. Put down the documentary. Step away from the bunker supply website. We know you watched a film with the word 'Apocaloptimist' in the title and now you look at a spreadsheet like it owes you money. So we sent a research agent into the literature to find out whether the machines really are coming for the lawyers and the accountants. It came back with receipts, some bad news, more good news, and a stern request that you hydrate.",
+      "doom_meter.label": "Mild Robot Weather",
+      "doom_meter.rationale": "Real disruption at the entry level, measured. Mass replacement of whole professions, not measured. Bring an umbrella, not a bunker.",
+      "verdict": "The robots are coming for tasks, especially the junior, repetitive ones, and that pressure is real and already measurable. They are not, on current evidence, replacing whole professions that run on judgment, liability and trust. Nobody can promise that holds forever. But 'the job changes' is a very different movie from 'the job ends', and right now the evidence is watching the first one. Calm down. Then go learn the tools.",
+      "adapt[0]": "Become the person who checks the machine. Verifying AI output is now a billable skill, and courts are actively punishing people who skip it.",
+      "adapt[1]": "Learn where the tools are great and where they faceplant. That jagged edge is where professional judgment earns its money.",
+      "adapt[2]": "If you are early in your career, aim at the parts of the job that involve clients, judgment and accountability, since entry-level routine work is where the pressure shows up first.",
+      "adapt[3]": "Treat scary percentages as task exposure, not pink slips, and ask every headline: measured, or forecast?",
+      "uncertainties[0]": "Most labor-market evidence covers the first couple of years of adoption. Effects could grow as tools improve.",
+      "uncertainties[1]": "Entry-level declines could shrink the pipeline of future senior professionals, an effect that would take years to show.",
+      "uncertainties[2]": "Task-exposure forecasts disagree with each other and with measured outcomes so far.",
+      "limitations[0]": "Fixture preview: source texts are hand-written offline paraphrases, not live retrievals.",
+      "limitations[1]": "No source here directly measures employment of U.S. lawyers after generative AI adoption.",
+      "limitations[2]": "Some fixture figures are older vintages: newer releases of the Stanford payroll study and the BLS outlook report different numbers, so a live run must use current versions."
+    },
+    "presentation": {
+      "doom_meter_score": 3,
+      "doomers_get_right": [
+        "F2",
+        "F1",
+        "F3",
+        "F7"
+      ],
+      "reasons_to_chill": [
+        "F4",
+        "F5",
+        "F6",
+        "F11",
+        "F10",
+        "F12"
+      ],
+      "advice_evidence": {
+        "adapt[0]": [
+          "F5",
+          "F6"
+        ],
+        "adapt[1]": [
+          "F7"
+        ],
+        "adapt[2]": [
+          "F2",
+          "F8"
+        ],
+        "adapt[3]": [
+          "F1",
+          "F3"
+        ]
+      }
+    }
+  }
+}

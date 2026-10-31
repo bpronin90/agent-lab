@@ -40,7 +40,7 @@ class Citations:
         links = []
         for sid in finding.source_ids:
             n, url = self.number(sid), escape(self.sources[sid].url, quote=True)
-            links.append(f'<a href="{url}" style="color:{PINK};font-weight:bold;text-decoration:none;">[{n}]</a>')
+            links.append(f'<a href="{url}" style="color:#b0124f;font-weight:bold;text-decoration:underline;">[{n}]</a>')
         return "<sup>" + "".join(links) + "</sup>"
 
     def text(self, finding: Finding) -> str:

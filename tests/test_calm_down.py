@@ -1,5 +1,6 @@
 """Offline tests for the Calm Down agent. They validate the pipeline, not live research."""
 
+import hashlib
 import json
 import re
 
@@ -12,13 +13,15 @@ from agent_lab import runtime
 from agent_lab.agents import REGISTRY
 from agent_lab.agents.calm_down import retrieval
 from agent_lab.agents.calm_down.mock_script import load_mock_dossier
-from agent_lab.agents.calm_down.pipeline import fixture_review, research_settings, run_calm_down
+from agent_lab.agents.calm_down.pipeline import (
+    finalize_calm_down, fixture_review, load_bundle, research_settings, run_calm_down,
+)
 from agent_lab.agents.calm_down.render import render_email_html
 from agent_lab.agents.calm_down.retrieval import (
     RetrievalError, SourceRecord, check_url, html_to_text, mode_from_env, research_session, safe_get,
 )
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
-from agent_lab.agents.calm_down.verify import normalize, review_request, verify_dossier
+from agent_lab.agents.calm_down.verify import finding_hash, normalize, review_request, verify_dossier
 from agent_lab.cli import main
 from agent_lab.config import Settings
 
@@ -34,6 +37,12 @@ def read_all_fixture_sources():
             for s in corpus["sources"]}
 
 
+def research_and_finalize(out, fear=FEAR):
+    research = run_calm_down(fear, OFFLINE, "fixture", out)
+    assert research.report.status == "needs_review" and not (out / "email.html").exists()
+    return finalize_calm_down(out, fixture_review())
+
+
 def dossier(**changes):
     data = load_mock_dossier()
     data.update(changes)
@@ -43,10 +52,11 @@ def dossier(**changes):
 # ---------------------------------------------------------------- end to end (fixture)
 
 def test_fixture_pipeline_produces_labeled_artifacts(tmp_path):
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
-    assert result.record.status == "succeeded" and result.ok, result.report.problems
-    assert result.record.agent_name == "calm_down"
-    assert set(result.record.tools_used) == {"search_sources", "read_source"}
+    research = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    assert research.record.agent_name == "calm_down"
+    assert set(research.record.tools_used) == {"search_sources", "read_source"}
+    result = finalize_calm_down(tmp_path, fixture_review())
+    assert result.ok, result.report.problems
     html = (tmp_path / "email.html").read_text()
     text = (tmp_path / "email.txt").read_text()
     md = (tmp_path / "research-dossier.md").read_text()
@@ -58,7 +68,7 @@ def test_fixture_pipeline_produces_labeled_artifacts(tmp_path):
 
 
 def test_email_html_is_email_safe(tmp_path):
-    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    research_and_finalize(tmp_path)
     html = (tmp_path / "email.html").read_text()
     assert "<script" not in html.lower() and "<img" not in html.lower() and "javascript:" not in html.lower()
     assert "<link" not in html.lower() and "@import" not in html
@@ -69,7 +79,7 @@ def test_email_html_is_email_safe(tmp_path):
 
 
 def test_every_rendered_citation_was_read_and_verified(tmp_path):
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    result = research_and_finalize(tmp_path)
     verified_sources = {sid for f in result.report.verified for sid in f.source_ids}
     provenance = json.loads((tmp_path / "sources.json").read_text())
     read = {s["source_id"] for s in provenance["sources"] if s["read"]}
@@ -79,7 +89,8 @@ def test_every_rendered_citation_was_read_and_verified(tmp_path):
 def test_html_escapes_model_text():
     d = dossier(opening="Cousin <script>alert(x)</script> & friends, calm down please now.")
     review = fixture_review()
-    review["approvals"].append(review_request(d, verify_dossier(d, read_all_fixture_sources()))["editorial"]["hash"])
+    review["approvals"].append(
+        review_request(d, verify_dossier(d, read_all_fixture_sources()), read_all_fixture_sources())["editorial"]["hash"])
     report = verify_dossier(d, read_all_fixture_sources(), review)
     assert report.ok, report.problems
     html = render_email_html(d, report, read_all_fixture_sources(), fixture=True)
@@ -162,7 +173,7 @@ def test_failed_run_writes_limitation_not_email(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(broken, model_name="x"))
     monkeypatch.setattr(runtime, "_sleep", lambda s: None)
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
     assert result.record.status == "failed" and result.record.error_class == "transient"
     assert not (tmp_path / "email.html").exists() and (tmp_path / "LIMITATION.md").exists()
 
@@ -173,7 +184,7 @@ def test_model_citing_unread_sources_gets_no_email(tmp_path, monkeypatch):
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, load_mock_dossier())])
 
     monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(lazy, model_name="lazy"))
-    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
     assert result.record.status == "succeeded" and not result.ok
     assert not (tmp_path / "email.html").exists()
     assert "not read" in (tmp_path / "research-dossier.md").read_text()
@@ -181,10 +192,12 @@ def test_model_citing_unread_sources_gets_no_email(tmp_path, monkeypatch):
 
 def test_cli_calm_down_exit_codes(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("AGENT_LAB_RUN_LOG_DIR", str(tmp_path / "runs"))
-    assert main(["calm-down", FEAR, "--out", str(tmp_path / "ok"), "--review", "fixture"]) == 0
-    assert main(["calm-down", FEAR, "--out", str(tmp_path / "pending")]) == 5  # needs human review
-    assert not (tmp_path / "pending" / "email.html").exists()
-    assert (tmp_path / "pending" / "review-request.json").exists()
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "ok")]) == 5  # research stops at human review
+    assert not (tmp_path / "ok" / "email.html").exists()
+    assert (tmp_path / "ok" / "review-request.json").exists() and (tmp_path / "ok" / "bundle.json").exists()
+    assert main(["calm-down-finalize", str(tmp_path / "ok"), "--review", "fixture"]) == 0
+    assert (tmp_path / "ok" / "email.html").exists()
+    assert main(["calm-down-finalize", str(tmp_path / "missing"), "--review", "fixture"]) == 2
     assert (tmp_path / "runs" / "runs.jsonl").exists()
     monkeypatch.setenv("AGENT_LAB_CALM_DOWN_RETRIEVAL", "live")
     assert main(["calm-down", FEAR, "--out", str(tmp_path / "x")]) == 2  # live + mock refused
@@ -369,10 +382,13 @@ def test_needs_review_without_approvals():
         render_email_html(dossier(), report, read_all_fixture_sources(), fixture=True)
 
 
-def test_fixture_review_refused_for_live(tmp_path):
-    live = research_settings(Settings.from_env({"AGENT_LAB_PROVIDER": "gemini", "GEMINI_API_KEY": "x"}), env={})
+def test_fixture_review_refused_for_live_bundle(tmp_path):
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    bundle["mode"] = "live"
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
     with pytest.raises(ValueError, match="fixture-scoped"):
-        run_calm_down(FEAR, live, "live", tmp_path, fixture_review())
+        finalize_calm_down(tmp_path, fixture_review())
 
 
 # ---------------------------------------------------------------- stale artifacts
@@ -386,12 +402,12 @@ def _fail_run(monkeypatch):
 
 
 def test_success_then_failure_leaves_no_stale_email(tmp_path, monkeypatch):
-    assert run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review()).ok
+    assert research_and_finalize(tmp_path).ok
     assert (tmp_path / "email.html").exists()
     _fail_run(monkeypatch)
-    result = run_calm_down("AI will replace dentists", OFFLINE, "fixture", tmp_path, fixture_review())
+    result = run_calm_down("AI will replace dentists", OFFLINE, "fixture", tmp_path)
     assert not result.ok
-    for name in ("email.html", "email.txt", "research-dossier.md"):
+    for name in ("email.html", "email.txt", "research-dossier.md", "bundle.json", "review-request.json"):
         assert not (tmp_path / name).exists()
     assert (tmp_path / "LIMITATION.md").exists()
 
@@ -399,13 +415,97 @@ def test_success_then_failure_leaves_no_stale_email(tmp_path, monkeypatch):
 def test_failure_then_success_leaves_no_stale_limitation(tmp_path, monkeypatch):
     with monkeypatch.context() as m:
         _fail_run(m)
-        run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+        run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
     assert (tmp_path / "LIMITATION.md").exists()
-    assert run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review()).ok
+    assert research_and_finalize(tmp_path).ok
     assert not (tmp_path / "LIMITATION.md").exists() and (tmp_path / "email.html").exists()
 
 
 def test_unrelated_files_in_output_dir_are_kept(tmp_path):
     (tmp_path / "notes.txt").write_text("mine")
-    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, fixture_review())
+    research_and_finalize(tmp_path)
     assert (tmp_path / "notes.txt").read_text() == "mine"
+
+
+# ---------------------------------------------------------------- second review (head 3afe0dd)
+
+def test_finalize_renders_reviewed_bundle_without_calling_the_model(tmp_path, monkeypatch):
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    request = json.loads((tmp_path / "review-request.json").read_text())
+    review = {"reviewer": "test person", "approvals": [f["hash"] for f in request["findings"]]
+              + [request["editorial"]["hash"]]}
+
+    def forbidden(*a, **k):
+        raise AssertionError("finalize must not call the research model or runtime")
+
+    monkeypatch.setattr(runtime, "run_agent", forbidden)
+    monkeypatch.setattr(runtime, "build_model", forbidden)
+    monkeypatch.setattr("agent_lab.agents.calm_down.pipeline.run_agent", forbidden)
+    monkeypatch.setattr(retrieval, "safe_get", forbidden)
+    result = finalize_calm_down(tmp_path, review)
+    assert result.ok and result.record is None
+    assert "test person" in (tmp_path / "email.html").read_text()
+    # the review request and bundle the person approved are untouched
+    assert json.loads((tmp_path / "review-request.json").read_text()) == request
+
+
+def test_review_request_exposes_confidence_sources_and_presentation(tmp_path):
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    request = json.loads((tmp_path / "review-request.json").read_text())
+    first = request["findings"][0]
+    assert {"confidence", "surprising", "sources"} <= set(first)
+    assert {"url", "text_sha256"} <= set(first["sources"][0])
+    assert {"doom_meter_score", "doomers_get_right", "reasons_to_chill", "advice_evidence"} <= set(
+        request["editorial"]["presentation"])
+
+
+def _approved(tmp_path):
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    request = json.loads((tmp_path / "review-request.json").read_text())
+    return {"reviewer": "test person",
+            "approvals": [f["hash"] for f in request["findings"]] + [request["editorial"]["hash"]]}
+
+
+def test_changed_confidence_invalidates_approval(tmp_path):
+    review = _approved(tmp_path)
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    next(f for f in bundle["dossier"]["findings"] if f["id"] == "F3")["confidence"] = "high"
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
+    result = finalize_calm_down(tmp_path, review)
+    assert result.report.status == "needs_review" and "F3" in result.report.pending_review
+    assert not (tmp_path / "email.html").exists()
+
+
+def test_changed_source_snapshot_invalidates_approval(tmp_path):
+    review = _approved(tmp_path)
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    s3 = next(s for s in bundle["sources"] if s["source_id"] == "S3")
+    s3["text"] += " Correction: these earnings estimates have been withdrawn because the records were invalid."
+    s3["text_sha256"] = hashlib.sha256(s3["text"].encode()).hexdigest()  # a consistent, re-digested snapshot
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
+    result = finalize_calm_down(tmp_path, review)
+    assert result.report.status == "needs_review" and "F4" in result.report.pending_review
+    assert not (tmp_path / "email.html").exists()
+
+
+def test_tampered_snapshot_without_digest_update_is_refused(tmp_path):
+    review = _approved(tmp_path)
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    next(s for s in bundle["sources"] if s["source_id"] == "S3")["text"] += " edited"
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
+    with pytest.raises(ValueError, match="digest"):
+        finalize_calm_down(tmp_path, review)
+
+
+def test_finding_hash_depends_on_source_url_and_text():
+    sources = read_all_fixture_sources()
+    f = dossier().findings[0]
+    before = finding_hash(f, sources)
+    sources["S1"].url = "https://arxiv.org/abs/2303.10130v9"
+    assert finding_hash(f, sources) != before
+
+
+def test_bundle_round_trip_matches_dossier(tmp_path):
+    research = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    _, loaded, sources = load_bundle(tmp_path)
+    assert loaded == research.dossier and all(s.read for s in sources.values() if s.text_sha256)

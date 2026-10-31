@@ -60,10 +60,19 @@ def _sha(*parts: str) -> str:
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
-def finding_hash(f: Finding) -> str:
-    """Binds a human approval to the exact claim, quote, sources, stance, kind and caveat."""
-    return _sha(f.id, f.claim, f.evidence_quote, ",".join(f.source_ids), f.stance, f.evidence_kind, f.caveat,
-                f.analogy or "")
+def source_digest(rec: SourceRecord) -> str:
+    """Content identity of a source: digest of the exact text the model saw (recomputed, not trusted)."""
+    return hashlib.sha256(rec.text.encode()).hexdigest()
+
+
+def finding_hash(f: Finding, read: dict[str, SourceRecord]) -> str:
+    """Binds a human approval to everything the reader is told about a finding, AND to the evidence:
+    claim, quote, stance, kind, confidence, caveat, analogy, the surprising flag, and each cited source's
+    URL and text digest. Any change, including a changed source snapshot, invalidates the approval."""
+    evidence = [f"{sid}|{read[sid].url}|{source_digest(read[sid])}" if sid in read else f"{sid}|unread"
+                for sid in f.source_ids]
+    return _sha(f.id, f.claim, f.evidence_quote, ",".join(evidence), f.stance, f.evidence_kind, f.confidence,
+                f.caveat, f.analogy or "", str(f.surprising))
 
 
 @dataclass
@@ -141,16 +150,25 @@ def _check_text(name: str, text: str, allowed_numbers: set[str], problems: list[
         problems.append(f"{name}: contains numbers not allowed here: {', '.join(sorted(invented))}")
 
 
-def review_request(dossier: CalmDownDossier, report: VerificationReport) -> dict:
+def review_request(dossier: CalmDownDossier, report: VerificationReport, read: dict[str, SourceRecord]) -> dict:
     """What a human reviewer must check. Copy approved hashes into a review file."""
     return {
         "instructions": "For each item, confirm the claim is fairly supported by the quote and source "
                         "(population, outcome, direction, and quantitative context). Copy the hash of each item "
                         "you approve into review.json under approvals, with your name as reviewer.",
-        "findings": [{"id": f.id, "hash": finding_hash(f), "claim": f.claim, "evidence_quote": f.evidence_quote,
-                      "sources": f.source_ids, "stance": f.stance, "kind": f.evidence_kind, "caveat": f.caveat,
-                      "analogy": f.analogy} for f in report.verified],
-        "editorial": {"hash": editorial_hash(dossier), "texts": global_editorial(dossier)},
+        "findings": [{"id": f.id, "hash": finding_hash(f, read), "claim": f.claim, "evidence_quote": f.evidence_quote,
+                      "stance": f.stance, "kind": f.evidence_kind, "confidence": f.confidence,
+                      "surprising": f.surprising, "caveat": f.caveat, "analogy": f.analogy,
+                      "sources": [{"id": sid, "title": read[sid].title, "url": read[sid].url,
+                                   "text_sha256": source_digest(read[sid]),
+                                   "backend": read[sid].backend} for sid in f.source_ids]}
+                     for f in report.verified],
+        "editorial": {"hash": editorial_hash(dossier), "texts": global_editorial(dossier),
+                      "presentation": {"doom_meter_score": dossier.doom_meter.score,
+                                       "doomers_get_right": dossier.doomers_get_right,
+                                       "reasons_to_chill": dossier.reasons_to_chill,
+                                       "advice_evidence": {f"adapt[{i}]": a.finding_ids
+                                                           for i, a in enumerate(dossier.adapt)}}},
     }
 
 
@@ -212,7 +230,7 @@ def verify_dossier(dossier: CalmDownDossier, read: dict[str, SourceRecord], revi
     # Human support gate: fail closed until every displayed claim and the editorial copy are approved.
     approvals = set((review or {}).get("approvals", []))
     report.reviewer = (review or {}).get("reviewer")
-    report.pending_review = [f.id for f in report.verified if finding_hash(f) not in approvals]
+    report.pending_review = [f.id for f in report.verified if finding_hash(f, read) not in approvals]
     if editorial_hash(dossier) not in approvals:
         report.pending_review.append("editorial")
     if report.pending_review or not report.reviewer:

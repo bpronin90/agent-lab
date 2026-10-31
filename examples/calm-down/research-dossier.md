@@ -6,7 +6,7 @@
 
 ## Run
 
-- **run_id:** `7f750430-1881-47a1-8f37-2219cc86edcb`
+- **run_id:** `e2eba41f-fb78-4d95-a3ec-8e1ede30efca`
 - **status:** `succeeded`
 - **provider:** `mock`
 - **served_model:** `mock-tool-caller`
@@ -15,6 +15,7 @@
 - **requests:** `3`
 - **tool_calls:** `20`
 - **searches:** `8`
+- **finalized:** `offline`
 - **retrieval mode:** `fixture`
 
 ## Verification outcome
@@ -136,15 +137,15 @@
 
 | id | title | publisher | year | tier | backend | read | retrieved | text sha256 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| S1 | [GPTs are GPTs: An Early Look at the Labor Market Impact Potential of Large Language Models](https://arxiv.org/abs/2303.10130) | arXiv (Eloundou, Manning, Mishkin, Rock) | 2023 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `b8cf90783ead7501` |
-| S10 | [ABA issues first ethics guidance on a lawyer's use of AI tools (Formal Opinion 512)](https://www.americanbar.org/news/abanews/aba-news-archives/2024/07/aba-issues-first-ethics-guidance-ai-tools/) | American Bar Association | 2024 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `87a5f18a58112ef5` |
-| S11 | [The Potentially Large Effects of Artificial Intelligence on Economic Growth](https://www.gspublishing.com/content/research/en/reports/2023/03/27/d64e052b-0f6e-45d7-967b-d7be35fabd16.html) | Goldman Sachs Global Economics Analyst (Hatzius et al.) | 2023 | secondary | fixture | yes | 2026-10-31T20:08:20+00:00 | `52bd954e780b7a00` |
-| S12 | [Accountants and Auditors: Occupational Outlook Handbook](https://www.bls.gov/ooh/business-and-financial/accountants-and-auditors.htm) | U.S. Bureau of Labor Statistics | 2024 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `f4f3044dfa188e30` |
-| S2 | [Generative AI at Work](https://www.nber.org/papers/w31161) | NBER Working Paper 31161 (Brynjolfsson, Li, Raymond) | 2023 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `7ff049c348d866ff` |
-| S3 | [Large Language Models, Small Labor Market Effects](https://www.nber.org/papers/w33777) | NBER Working Paper 33777 (Humlum, Vestergaard) | 2025 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `2f587278e3f5a380` |
-| S4 | [Canaries in the Coal Mine? Six Facts about the Recent Employment Effects of Artificial Intelligence](https://digitaleconomy.stanford.edu/publications/canaries-in-the-coal-mine/) | Stanford Digital Economy Lab (Brynjolfsson, Chandar, Chen) | 2025 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `8f5b0b9c591625ba` |
-| S5 | [Mata v. Avianca, Inc.](https://en.wikipedia.org/wiki/Mata_v._Avianca,_Inc.) | Wikipedia summary of S.D.N.Y. case 22-cv-1461 | 2023 | secondary | fixture | yes | 2026-10-31T20:08:20+00:00 | `7d83b3e7cb8f7e80` |
-| S6 | [Large Legal Fictions: Profiling Legal Hallucinations in Large Language Models](https://arxiv.org/abs/2401.01301v1) | arXiv v1 (Dahl, Magesh, Suzgun, Ho); later versions report different figures | 2024 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `bcba2d46a73f77ca` |
-| S7 | [Navigating the Jagged Technological Frontier: Field Experimental Evidence of the Effects of AI on Knowledge Worker Productivity and Quality](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4573321) | Harvard Business School Working Paper 24-013 (Dell'Acqua et al.) | 2023 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `e44533ae146bc53f` |
-| S8 | [Why Are There Still So Many Jobs? The History and Future of Workplace Automation](https://www.aeaweb.org/articles?id=10.1257/jep.29.3.3) | Journal of Economic Perspectives 29(3) (Autor) | 2015 | primary | fixture | yes | 2026-10-31T20:08:20+00:00 | `cf58ef4778429016` |
-| S9 | [Toil and Technology](https://www.imf.org/external/pubs/ft/fandd/2015/03/bessen.htm) | IMF Finance & Development (Bessen) | 2015 | secondary | fixture | yes | 2026-10-31T20:08:20+00:00 | `89c743de160cf4f8` |
+| S1 | [GPTs are GPTs: An Early Look at the Labor Market Impact Potential of Large Language Models](https://arxiv.org/abs/2303.10130) | arXiv (Eloundou, Manning, Mishkin, Rock) | 2023 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `b8cf90783ead7501` |
+| S10 | [ABA issues first ethics guidance on a lawyer's use of AI tools (Formal Opinion 512)](https://www.americanbar.org/news/abanews/aba-news-archives/2024/07/aba-issues-first-ethics-guidance-ai-tools/) | American Bar Association | 2024 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `87a5f18a58112ef5` |
+| S11 | [The Potentially Large Effects of Artificial Intelligence on Economic Growth](https://www.gspublishing.com/content/research/en/reports/2023/03/27/d64e052b-0f6e-45d7-967b-d7be35fabd16.html) | Goldman Sachs Global Economics Analyst (Hatzius et al.) | 2023 | secondary | fixture | yes | 2026-10-31T20:23:18+00:00 | `52bd954e780b7a00` |
+| S12 | [Accountants and Auditors: Occupational Outlook Handbook](https://www.bls.gov/ooh/business-and-financial/accountants-and-auditors.htm) | U.S. Bureau of Labor Statistics | 2024 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `f4f3044dfa188e30` |
+| S2 | [Generative AI at Work](https://www.nber.org/papers/w31161) | NBER Working Paper 31161 (Brynjolfsson, Li, Raymond) | 2023 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `7ff049c348d866ff` |
+| S3 | [Large Language Models, Small Labor Market Effects](https://www.nber.org/papers/w33777) | NBER Working Paper 33777 (Humlum, Vestergaard) | 2025 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `2f587278e3f5a380` |
+| S4 | [Canaries in the Coal Mine? Six Facts about the Recent Employment Effects of Artificial Intelligence](https://digitaleconomy.stanford.edu/publications/canaries-in-the-coal-mine/) | Stanford Digital Economy Lab (Brynjolfsson, Chandar, Chen) | 2025 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `8f5b0b9c591625ba` |
+| S5 | [Mata v. Avianca, Inc.](https://en.wikipedia.org/wiki/Mata_v._Avianca,_Inc.) | Wikipedia summary of S.D.N.Y. case 22-cv-1461 | 2023 | secondary | fixture | yes | 2026-10-31T20:23:18+00:00 | `7d83b3e7cb8f7e80` |
+| S6 | [Large Legal Fictions: Profiling Legal Hallucinations in Large Language Models](https://arxiv.org/abs/2401.01301v1) | arXiv v1 (Dahl, Magesh, Suzgun, Ho); later versions report different figures | 2024 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `bcba2d46a73f77ca` |
+| S7 | [Navigating the Jagged Technological Frontier: Field Experimental Evidence of the Effects of AI on Knowledge Worker Productivity and Quality](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4573321) | Harvard Business School Working Paper 24-013 (Dell'Acqua et al.) | 2023 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `e44533ae146bc53f` |
+| S8 | [Why Are There Still So Many Jobs? The History and Future of Workplace Automation](https://www.aeaweb.org/articles?id=10.1257/jep.29.3.3) | Journal of Economic Perspectives 29(3) (Autor) | 2015 | primary | fixture | yes | 2026-10-31T20:23:18+00:00 | `cf58ef4778429016` |
+| S9 | [Toil and Technology](https://www.imf.org/external/pubs/ft/fandd/2015/03/bessen.htm) | IMF Finance & Development (Bessen) | 2015 | secondary | fixture | yes | 2026-10-31T20:23:18+00:00 | `89c743de160cf4f8` |

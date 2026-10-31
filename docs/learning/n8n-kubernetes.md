@@ -21,7 +21,7 @@ and no permanent infrastructure.
 | File | Role |
 | --- | --- |
 | `k8s/n8n/rbac.yaml` | `n8n-job-runner` ServiceAccount and a namespace Role: create/get/delete Jobs, list pods, read pod logs. Nothing else. |
-| `k8s/n8n/admission-policy.yaml` | Limits what that ServiceAccount's Jobs may contain: image, `args = [run, --, prompt]`, an env allowlist, no secrets, no SA token, not privileged, a bounded deadline. |
+| `k8s/n8n/admission-policy.yaml` | Limits what that ServiceAccount's Jobs may contain: image, `args = [run, --, prompt]`, no `command`, lifecycle hooks or probes, an env allowlist, no secrets, no SA token, not privileged, a bounded deadline, one pod, and resource limits at most 500m CPU and 256Mi memory. |
 | `k8s/n8n/namespace-psa.yaml` | Pod Security `restricted` on `agent-lab`. |
 | `n8n/agent-lab-run-k8s-job.json` | Sub-workflow that does the work for one prompt. |
 | `n8n/agent-lab-n8n-k8s-experiment.json` | Manual-trigger workflow that runs the scenarios through the sub-workflow. |
@@ -114,9 +114,11 @@ RBAC and admission checks: as `n8n-job-runner`, `kubectl auth can-i` allows
 create/get/delete Jobs, list pods, and get pod logs. It denies listing Jobs,
 patching Jobs, creating pods, `pods/exec`, reading secrets or ConfigMaps, any
 other namespace, nodes, and ClusterRoleBindings. Creating a Job as that account is
-denied when the Job uses another image, sets a `command`, omits the `--` argument,
-has extra env or a `secretRef`, mounts a `hostPath`, has no deadline, mounts an SA
-token, or sets `privileged`.
+denied when the Job uses another image, sets a `command`, adds a lifecycle hook or
+probe (both can exec arbitrary commands), omits the `--` argument, has extra env or a
+`secretRef`, mounts a `hostPath`, has no deadline, mounts an SA token, sets
+`privileged`, asks for more than one pod (`parallelism`/`completions`), or omits or
+exceeds the resource limits.
 
 ## What each piece teaches
 

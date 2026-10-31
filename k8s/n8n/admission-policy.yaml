@@ -26,6 +26,14 @@ spec:
         variables.pod.containers[0].image == "agent-lab:dev" &&
         !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers)
       message: "only a single agent-lab:dev container is allowed"
+    # The image ENTRYPOINT (agent-lab) is the only process: no command override,
+    # and no lifecycle hooks or probes, which can exec arbitrary commands too.
+    - expression: >-
+        !has(variables.pod.containers[0].lifecycle) &&
+        !has(variables.pod.containers[0].livenessProbe) &&
+        !has(variables.pod.containers[0].readinessProbe) &&
+        !has(variables.pod.containers[0].startupProbe)
+      message: "lifecycle hooks and probes are not allowed"
     - expression: >-
         !has(variables.pod.containers[0].command) &&
         has(variables.pod.containers[0].args) &&
@@ -68,6 +76,19 @@ spec:
         has(object.spec.activeDeadlineSeconds) && object.spec.activeDeadlineSeconds <= 300 &&
         has(object.spec.backoffLimit) && object.spec.backoffLimit <= 1
       message: "Jobs need activeDeadlineSeconds <= 300 and backoffLimit <= 1"
+    # One pod per Job, capped at the base CronJob's limits.
+    - expression: >-
+        (!has(object.spec.parallelism) || object.spec.parallelism == 1) &&
+        (!has(object.spec.completions) || object.spec.completions == 1)
+      message: "Jobs must run a single pod (parallelism and completions 1)"
+    - expression: >-
+        has(variables.pod.containers[0].resources) &&
+        has(variables.pod.containers[0].resources.limits) &&
+        "cpu" in variables.pod.containers[0].resources.limits &&
+        "memory" in variables.pod.containers[0].resources.limits &&
+        quantity(string(variables.pod.containers[0].resources.limits["cpu"])).compareTo(quantity("500m")) <= 0 &&
+        quantity(string(variables.pod.containers[0].resources.limits["memory"])).compareTo(quantity("256Mi")) <= 0
+      message: "container limits must be set and at most cpu 500m, memory 256Mi"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build: "builder" installs dependencies, "runtime" holds only what runs.
 
-FROM python:3.13-slim AS builder
+FROM python:3.15-slim AS builder
 WORKDIR /build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY requirements.lock requirements-build.lock ./
@@ -11,7 +11,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN /opt/venv/bin/pip install --no-deps --no-build-isolation .
 
-FROM python:3.13-slim AS runtime
+FROM python:3.15-slim AS runtime
 ARG GIT_SHA=unknown
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \

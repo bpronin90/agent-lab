@@ -99,8 +99,16 @@ done
 review="$root/scripts/codex-review.sh"
 cshim="$tmp/cshim"
 mkdir -p "$cshim"
-good="$(printf 'a%.0s' {1..40})"
 other="$(printf 'b%.0s' {1..40})"
+# The helper insists on a clean checkout of the reviewed head, so run a copy inside a throwaway repo.
+crepo="$tmp/crepo"
+mkdir -p "$crepo/scripts"
+git init -q -b main "$crepo"
+cp "$review" "$crepo/scripts/codex-review.sh"
+git -C "$crepo" add scripts/codex-review.sh
+git -C "$crepo" commit -q -m review-helper
+good="$(git -C "$crepo" rev-parse HEAD)"
+review="$crepo/scripts/codex-review.sh"
 cat >"$cshim/gh" <<'EOF'
 #!/usr/bin/env bash
 # `pr view ... headRefOid` pops the next head from $FAKE_HEADS (one per line); the last repeats.
@@ -121,6 +129,11 @@ case "${CODEX_MODE:-ok}" in
   fail) echo "boom" >&2; exit 1 ;;
   empty) : >"$out" ;;
   noverdict) echo "looks fine" >"$out" ;;
+  badverdict) printf 'VERDICT=banana\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+  wrongpr) printf 'VERDICT=APPROVED\nPR: #999\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+  wrongsha) printf 'VERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_OTHER" >"$out" ;;
+  twice) printf 'VERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\nVERDICT=BLOCKED\nPR: #7\nCommit: %s\nFindings: x\n' "$FAKE_SHA" "$FAKE_SHA" >"$out" ;;
+  trailing) printf 'ok\n\nVERDICT=APPROVED  \nPR: #7  \nCommit: %s  \nFindings: none\n' "$FAKE_SHA" >"$out" ;;
   *) printf 'No findings.\n\nVERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
 esac
 EOF
@@ -129,7 +142,7 @@ chmod +x "$cshim/gh" "$cshim/codex"
 run_review() { # run_review <pr> <sha> [heads...]; prints exit code
   local pr="$1" sha="$2"; shift 2
   printf '%s\n' "$@" >"$tmp/heads"
-  PATH="$cshim:$PATH" FAKE_HEADS="$tmp/heads" FAKE_SHA="$good" CODEX_ARGS="$tmp/codex.args" \
+  PATH="$cshim:$PATH" FAKE_HEADS="$tmp/heads" FAKE_SHA="$good" FAKE_OTHER="$other" CODEX_ARGS="$tmp/codex.args" \
     "$review" "$pr" "$sha" >"$tmp/review.out" 2>"$tmp/review.err"
   echo $?
 }
@@ -149,6 +162,19 @@ expect 3 "$(CODEX_MODE=fail run_review 7 "$good" "$good")" "review: codex failur
 expect 3 "$(CODEX_MODE=empty run_review 7 "$good" "$good")" "review: empty review rejected"
 expect 3 "$(CODEX_MODE=noverdict run_review 7 "$good" "$good")" "review: review without VERDICT record rejected"
 expect 3 "$(run_review 7 "$good" "$good" "$other")" "review: head moved during review rejected"
+expect 3 "$(CODEX_MODE=badverdict run_review 7 "$good" "$good")" "review: unknown verdict word rejected"
+expect 3 "$(CODEX_MODE=wrongpr run_review 7 "$good" "$good")" "review: record for another PR rejected"
+expect 3 "$(CODEX_MODE=wrongsha run_review 7 "$good" "$good")" "review: record for another commit rejected"
+expect 3 "$(CODEX_MODE=twice run_review 7 "$good" "$good")" "review: two verdict records rejected"
+expect 0 "$(CODEX_MODE=trailing run_review 7 "$good" "$good")" "review: trailing whitespace in record tolerated"
+rm -f "$tmp/codex.args"
+echo dirty >"$crepo/untracked.txt"
+expect 2 "$(run_review 7 "$good" "$good")" "review: dirty checkout rejected"
+[[ ! -e "$tmp/codex.args" ]] && echo "ok   review: codex not launched on dirty checkout" || { echo "FAIL review: codex launched on dirty checkout"; fails=$((fails + 1)); }
+rm -f "$crepo/untracked.txt"
+git -C "$crepo" commit -q --allow-empty -m moved
+expect 2 "$(run_review 7 "$good" "$good")" "review: checkout HEAD differs from reviewed SHA rejected"
+git -C "$crepo" reset -q --soft HEAD~1
 
 echo
 if ((fails)); then

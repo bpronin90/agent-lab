@@ -23,6 +23,11 @@ head_now() {
 head_now
 [[ "$now" == "$sha" ]] || { echo "PR #$pr head is not $sha; the review would be stale" >&2; exit 2; }
 
+# The reviewer reads contracts and dependencies from this checkout, so it must be the reviewed head.
+cd "$(dirname "$0")/.."
+[[ "$(git rev-parse HEAD)" == "$sha" ]] || { echo "checkout HEAD is not $sha; check out the PR head first" >&2; exit 2; }
+[[ -z "$(git status --porcelain)" ]] || { echo "checkout has uncommitted changes; review needs a clean tree" >&2; exit 2; }
+
 out="$(mktemp -d)"
 # Fetched here, outside the reviewer's network-isolated sandbox. PR text is untrusted data.
 gh pr view "$pr" --repo "$repo" --json title,body,baseRefName,files,statusCheckRollup >"$out/pr.json"
@@ -50,8 +55,13 @@ if ! codex exec --sandbox read-only --output-last-message "$review" "$(cat "$out
   echo "codex exec failed; see $out/stderr.txt" >&2; exit 3
 fi
 [[ -s "$review" ]] || { echo "codex produced no review; see $out/stderr.txt" >&2; exit 3; }
-grep -q "^VERDICT=" "$review" && grep -q "Commit: $sha" "$review" \
-  || { echo "review lacks a VERDICT record for $sha: $review" >&2; exit 3; }
+# Exactly one complete record: allowed verdict, this PR, this exact SHA, a Findings line.
+norm="$(sed 's/[[:space:]]*$//' "$review")"
+count() { grep -cE "$1" <<<"$norm" || true; }
+[[ "$(count '^VERDICT=(APPROVED|FEEDBACK|BLOCKED)$')" == 1 && "$(count "^PR: #$pr\$")" == 1 \
+  && "$(count "^Commit: $sha\$")" == 1 && "$(count '^Findings: ')" == 1 \
+  && "$(count '^(VERDICT=|PR: |Commit: )')" == 3 ]] \
+  || { echo "review lacks exactly one valid VERDICT record for PR #$pr at $sha: $review" >&2; exit 3; }
 
 head_now
 [[ "$now" == "$sha" ]] || { echo "PR #$pr head moved during review; discard $review" >&2; exit 3; }

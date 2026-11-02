@@ -29,8 +29,28 @@ jobs:
       - run: pytest
         env:
           PYDANTIC_AI_NO_BANNER: "1"
+      - name: Governance helper tests (offline, mocked gh/codex)
+        run: bash scripts/test-governance-helpers.sh
       - name: Contract schemas are up to date
         run: python scripts/export_contract_schemas.py && git diff --exit-code contracts/
+
+  # Informational: the container runs Python 3.15 (Dockerfile), so run the suite there too.
+  # Not a required check; the owner decides whether to require it in branch protection.
+  test-py315:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install locked dependencies (hash-checked)
+        run: |
+          pip install --require-hashes -r requirements-dev.lock -r requirements-build.lock
+          pip install --no-deps --no-build-isolation -e .
+      - run: pytest
+        env:
+          PYDANTIC_AI_NO_BANNER: "1"
 
   docker:
     runs-on: ubuntu-latest

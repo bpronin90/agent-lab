@@ -27,6 +27,9 @@ Rules that hold in every environment:
   settings or visibility, touch credentials or secrets, or cause external side effects.
   Only the owner does these, and an ambiguous "looks good" is not authorization.
 - Do not review or approve a head you produced.
+- If an independent reviewer cannot post to GitHub, the owner, or an implementer the
+  owner authorized, relays its complete review verbatim as described in `CONTRIBUTING.md`.
+  A relay is transport only: it does not make the poster the reviewer or authorize merge.
 - Report exactly which checks ran. Never present simulated, skipped, or unexecuted
   validation as proven.
 - When a rule is unclear or a needed step needs owner authority, stop and ask.

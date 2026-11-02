@@ -94,6 +94,101 @@ for cmd in "git status" "git -C$feature status" "git -C $feature log --oneline" 
   expect 0 "$(hook_exit "$cmd" "$feature")" "hook allows: $cmd"
 done
 
+# --- codex-review.sh ----------------------------------------------------------
+# gh and codex are PATH shims; no real GitHub or Codex call is made.
+review="$root/scripts/codex-review.sh"
+cshim="$tmp/cshim"
+mkdir -p "$cshim"
+other="$(printf 'b%.0s' {1..40})"
+# The helper insists on a clean checkout of the reviewed head, so run a copy inside a throwaway repo.
+crepo="$tmp/crepo"
+mkdir -p "$crepo/scripts"
+git init -q -b main "$crepo"
+cp "$review" "$crepo/scripts/codex-review.sh"
+git -C "$crepo" add scripts/codex-review.sh
+git -C "$crepo" commit -q -m review-helper
+good="$(git -C "$crepo" rev-parse HEAD)"
+review="$crepo/scripts/codex-review.sh"
+cat >"$cshim/gh" <<'EOF'
+#!/usr/bin/env bash
+# `pr view ... headRefOid` pops the next head from $FAKE_HEADS (one per line); the last repeats.
+if [[ "$*" == *headRefOid* ]]; then
+  [[ "${GH_FAIL:-}" == 1 ]] && { echo "gh: simulated failure" >&2; exit 1; }
+  head -n1 "$FAKE_HEADS"
+  if [[ $(wc -l <"$FAKE_HEADS") -gt 1 ]]; then sed -i 1d "$FAKE_HEADS"; fi
+elif [[ "$*" == *"pr diff"* ]]; then echo "diff --git a/x b/x"
+elif [[ "$*" == *"--jq .body"* ]]; then printf '%s\n' "${FAKE_BODY-Issue: #12}"
+elif [[ "$1" == issue ]]; then
+  [[ "${ISSUE_FAIL:-}" == 1 ]] && { echo "gh: no such issue" >&2; exit 1; }
+  echo "$*" >>"$GH_LOG"; echo '{"number":12}'
+elif [[ "$1" == api ]]; then echo "$*" >>"$GH_LOG"; echo '[]'
+else echo '{"title":"t"}'; fi
+EOF
+cat >"$cshim/codex" <<'EOF'
+#!/usr/bin/env bash
+# Records its argv, fails fast if stdin is not closed, then writes the review per $CODEX_MODE.
+echo "$*" >"$CODEX_ARGS"
+if read -r -t 2 _; then :; else [[ $? -gt 128 ]] && { echo "stdin left open" >&2; exit 9; }; fi
+while [[ $# -gt 0 ]]; do [[ "$1" == --output-last-message ]] && out="$2"; shift; done
+case "${CODEX_MODE:-ok}" in
+  fail) echo "boom" >&2; exit 1 ;;
+  empty) : >"$out" ;;
+  noverdict) echo "looks fine" >"$out" ;;
+  badverdict) printf 'VERDICT=banana\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+  wrongpr) printf 'VERDICT=APPROVED\nPR: #999\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+  wrongsha) printf 'VERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_OTHER" >"$out" ;;
+  twice) printf 'VERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\nVERDICT=BLOCKED\nPR: #7\nCommit: %s\nFindings: x\n' "$FAKE_SHA" "$FAKE_SHA" >"$out" ;;
+  trailing) printf 'ok\n\nVERDICT=APPROVED  \nPR: #7  \nCommit: %s  \nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+  *) printf 'No findings.\n\nVERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+esac
+EOF
+chmod +x "$cshim/gh" "$cshim/codex"
+
+run_review() { # run_review <pr> <sha> [heads...]; prints exit code
+  local pr="$1" sha="$2"; shift 2
+  printf '%s\n' "$@" >"$tmp/heads"
+  PATH="$cshim:$PATH" GH_LOG="$tmp/gh.log" FAKE_HEADS="$tmp/heads" FAKE_SHA="$good" FAKE_OTHER="$other" CODEX_ARGS="$tmp/codex.args" \
+    "$review" "$pr" "$sha" >"$tmp/review.out" 2>"$tmp/review.err"
+  echo $?
+}
+
+expect 2 "$("$review" >/dev/null 2>&1; echo $?)" "review: no arguments rejected"
+expect 2 "$(run_review x "$good" "$good")" "review: non-numeric PR rejected"
+expect 2 "$(run_review 7 abc123 "$good")" "review: short SHA rejected"
+expect 2 "$(run_review 7 "${good^^}" "$good")" "review: uppercase SHA rejected"
+expect 2 "$(run_review 7 "$good" "$other")" "review: stale head rejected before codex runs"
+[[ ! -e "$tmp/codex.args" ]] && echo "ok   review: codex not launched on head mismatch" || { echo "FAIL review: codex launched on mismatch"; fails=$((fails + 1)); }
+expect 3 "$(GH_FAIL=1 run_review 7 "$good" "$good")" "review: gh failure is an error"
+expect 0 "$(run_review 7 "$good" "$good")" "review: matching head succeeds"
+grep -q -- "--sandbox read-only" "$tmp/codex.args" && grep -q -- "--output-last-message" "$tmp/codex.args" \
+  && echo "ok   review: read-only sandbox and output file used" || { echo "FAIL review: sandbox/output flags missing"; fails=$((fails + 1)); }
+[[ -s "$(cat "$tmp/review.out")" ]] && echo "ok   review: prints the saved review path" || { echo "FAIL review: no review path"; fails=$((fails + 1)); }
+expect 3 "$(CODEX_MODE=fail run_review 7 "$good" "$good")" "review: codex failure is an error"
+expect 3 "$(CODEX_MODE=empty run_review 7 "$good" "$good")" "review: empty review rejected"
+expect 3 "$(CODEX_MODE=noverdict run_review 7 "$good" "$good")" "review: review without VERDICT record rejected"
+expect 3 "$(run_review 7 "$good" "$good" "$other")" "review: head moved during review rejected"
+rm -f "$tmp/gh.log"
+run_review 7 "$good" "$good" >/dev/null
+grep -q "issue view 12" "$tmp/gh.log" && echo "ok   review: linked issue contract fetched for the reviewer" || { echo "FAIL review: issue not fetched"; fails=$((fails + 1)); }
+grep -q "commits/$good/check-runs" "$tmp/gh.log" && echo "ok   review: CI check runs fetched for the exact SHA" || { echo "FAIL review: check runs not fetched by SHA"; fails=$((fails + 1)); }
+expect 3 "$(ISSUE_FAIL=1 run_review 7 "$good" "$good")" "review: unreadable issue is an error"
+expect 3 "$(FAKE_BODY='no issue line' run_review 7 "$good" "$good")" "review: PR body without Issue line rejected"
+expect 3 "$(FAKE_BODY=$'Issue: #1\nIssue: #2' run_review 7 "$good" "$good")" "review: PR body with two Issue lines rejected"
+expect 0 "$(FAKE_BODY='Issue: none' run_review 7 "$good" "$good")" "review: 'Issue: none' accepted without an issue fetch"
+expect 3 "$(CODEX_MODE=badverdict run_review 7 "$good" "$good")" "review: unknown verdict word rejected"
+expect 3 "$(CODEX_MODE=wrongpr run_review 7 "$good" "$good")" "review: record for another PR rejected"
+expect 3 "$(CODEX_MODE=wrongsha run_review 7 "$good" "$good")" "review: record for another commit rejected"
+expect 3 "$(CODEX_MODE=twice run_review 7 "$good" "$good")" "review: two verdict records rejected"
+expect 0 "$(CODEX_MODE=trailing run_review 7 "$good" "$good")" "review: trailing whitespace in record tolerated"
+rm -f "$tmp/codex.args"
+echo dirty >"$crepo/untracked.txt"
+expect 2 "$(run_review 7 "$good" "$good")" "review: dirty checkout rejected"
+[[ ! -e "$tmp/codex.args" ]] && echo "ok   review: codex not launched on dirty checkout" || { echo "FAIL review: codex launched on dirty checkout"; fails=$((fails + 1)); }
+rm -f "$crepo/untracked.txt"
+git -C "$crepo" commit -q --allow-empty -m moved
+expect 2 "$(run_review 7 "$good" "$good")" "review: checkout HEAD differs from reviewed SHA rejected"
+git -C "$crepo" reset -q --soft HEAD~1
+
 echo
 if ((fails)); then
   echo "$fails test(s) failed"

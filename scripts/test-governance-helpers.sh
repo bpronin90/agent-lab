@@ -94,6 +94,62 @@ for cmd in "git status" "git -C$feature status" "git -C $feature log --oneline" 
   expect 0 "$(hook_exit "$cmd" "$feature")" "hook allows: $cmd"
 done
 
+# --- codex-review.sh ----------------------------------------------------------
+# gh and codex are PATH shims; no real GitHub or Codex call is made.
+review="$root/scripts/codex-review.sh"
+cshim="$tmp/cshim"
+mkdir -p "$cshim"
+good="$(printf 'a%.0s' {1..40})"
+other="$(printf 'b%.0s' {1..40})"
+cat >"$cshim/gh" <<'EOF'
+#!/usr/bin/env bash
+# `pr view ... headRefOid` pops the next head from $FAKE_HEADS (one per line); the last repeats.
+if [[ "$*" == *headRefOid* ]]; then
+  [[ "${GH_FAIL:-}" == 1 ]] && { echo "gh: simulated failure" >&2; exit 1; }
+  head -n1 "$FAKE_HEADS"
+  if [[ $(wc -l <"$FAKE_HEADS") -gt 1 ]]; then sed -i 1d "$FAKE_HEADS"; fi
+elif [[ "$*" == *"pr diff"* ]]; then echo "diff --git a/x b/x"
+else echo '{"title":"t"}'; fi
+EOF
+cat >"$cshim/codex" <<'EOF'
+#!/usr/bin/env bash
+# Records its argv, fails fast if stdin is not closed, then writes the review per $CODEX_MODE.
+echo "$*" >"$CODEX_ARGS"
+if read -r -t 2 _; then :; else [[ $? -gt 128 ]] && { echo "stdin left open" >&2; exit 9; }; fi
+while [[ $# -gt 0 ]]; do [[ "$1" == --output-last-message ]] && out="$2"; shift; done
+case "${CODEX_MODE:-ok}" in
+  fail) echo "boom" >&2; exit 1 ;;
+  empty) : >"$out" ;;
+  noverdict) echo "looks fine" >"$out" ;;
+  *) printf 'No findings.\n\nVERDICT=APPROVED\nPR: #7\nCommit: %s\nFindings: none\n' "$FAKE_SHA" >"$out" ;;
+esac
+EOF
+chmod +x "$cshim/gh" "$cshim/codex"
+
+run_review() { # run_review <pr> <sha> [heads...]; prints exit code
+  local pr="$1" sha="$2"; shift 2
+  printf '%s\n' "$@" >"$tmp/heads"
+  PATH="$cshim:$PATH" FAKE_HEADS="$tmp/heads" FAKE_SHA="$good" CODEX_ARGS="$tmp/codex.args" \
+    "$review" "$pr" "$sha" >"$tmp/review.out" 2>"$tmp/review.err"
+  echo $?
+}
+
+expect 2 "$("$review" >/dev/null 2>&1; echo $?)" "review: no arguments rejected"
+expect 2 "$(run_review x "$good" "$good")" "review: non-numeric PR rejected"
+expect 2 "$(run_review 7 abc123 "$good")" "review: short SHA rejected"
+expect 2 "$(run_review 7 "${good^^}" "$good")" "review: uppercase SHA rejected"
+expect 2 "$(run_review 7 "$good" "$other")" "review: stale head rejected before codex runs"
+[[ ! -e "$tmp/codex.args" ]] && echo "ok   review: codex not launched on head mismatch" || { echo "FAIL review: codex launched on mismatch"; fails=$((fails + 1)); }
+expect 3 "$(GH_FAIL=1 run_review 7 "$good" "$good")" "review: gh failure is an error"
+expect 0 "$(run_review 7 "$good" "$good")" "review: matching head succeeds"
+grep -q -- "--sandbox read-only" "$tmp/codex.args" && grep -q -- "--output-last-message" "$tmp/codex.args" \
+  && echo "ok   review: read-only sandbox and output file used" || { echo "FAIL review: sandbox/output flags missing"; fails=$((fails + 1)); }
+[[ -s "$(cat "$tmp/review.out")" ]] && echo "ok   review: prints the saved review path" || { echo "FAIL review: no review path"; fails=$((fails + 1)); }
+expect 3 "$(CODEX_MODE=fail run_review 7 "$good" "$good")" "review: codex failure is an error"
+expect 3 "$(CODEX_MODE=empty run_review 7 "$good" "$good")" "review: empty review rejected"
+expect 3 "$(CODEX_MODE=noverdict run_review 7 "$good" "$good")" "review: review without VERDICT record rejected"
+expect 3 "$(run_review 7 "$good" "$good" "$other")" "review: head moved during review rejected"
+
 echo
 if ((fails)); then
   echo "$fails test(s) failed"

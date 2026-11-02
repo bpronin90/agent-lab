@@ -7,6 +7,9 @@ updates:
   - package-ecosystem: github-actions   # keeps SHA pins current
     directory: /
     schedule: {interval: weekly}
+    groups:
+      github-actions:        # one PR per week, so merges do not leave siblings behind main
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     schedule: {interval: monthly}

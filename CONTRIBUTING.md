@@ -48,9 +48,20 @@ If you are unsure whether work is substantive, treat it as substantive.
   is at the owner's discretion.
 - Review findings cite `file:line` and a concrete failing input or state, and separate
   blocking defects from optional suggestions. A new commit makes earlier reviews stale.
+- A reviewer that cannot post (for example a read-only, network-isolated Codex run) has its
+  complete review relayed verbatim, where the handoff was posted, by the owner or an
+  implementer the owner authorized. Prepend `Relayed review from: <reviewer>`, keep the
+  reviewer's findings, stated limits, and exactly one `VERDICT`/`PR`/`Commit` (full SHA)/
+  `Findings` record, and confirm the PR head still equals the reviewed SHA before posting
+  and before merging. A missing, incomplete, or stale review does not satisfy the merge
+  condition. Never edit or delete review records; supersede them. A relay is transport
+  only: it does not make the poster the reviewer or authorize merge. Run
+  `scripts/codex-review.sh <PR> <head-sha>` to produce a Codex review of an exact head;
+  it never posts or merges.
 - An agent may merge a PR only when CI passes on the exact head; for substantive changes,
-  an independent reviewer who is not the head's author has posted `VERDICT=APPROVED` on
-  that exact head with no unresolved blocking findings; and the PR does not deploy,
+  an independent reviewer who is not the head's author has issued `VERDICT=APPROVED` for
+  that exact head, posted directly or relayed as described below, with no unresolved
+  blocking findings; and the PR does not deploy,
   release, migrate data, touch credentials, secrets, or repository settings, or cause
   external side effects. Green CI alone is not permission to merge.
 - Only the owner merges Dependabot PRs, merges with `--admin`, or closes issues other

@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Actions are pinned to full commit SHAs
         run: |
           if grep -rnE '^\s*(- )?uses:\s' .github/workflows | grep -vE 'uses:\s+[^@]+@[0-9a-f]{40}(\s|$)'; then
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker build --build-arg GIT_SHA=${{ github.sha }} -t agent-lab:ci .
       - name: Run the container offline (mock provider, no network)
         run: |

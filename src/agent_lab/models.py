@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
+from typing import Callable
 
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
@@ -18,6 +20,13 @@ class ProviderConfigError(RuntimeError):
 
 
 _last_request_at: float | None = None
+# Set by the runtime for the duration of an attempt: seconds left before the run deadline.
+remaining_seconds: contextvars.ContextVar[Callable[[], float] | None] = contextvars.ContextVar(
+    "remaining_seconds", default=None)
+
+
+class PacingDeadlineError(RuntimeError):
+    """The wait needed to respect the request pacing would outlast the run deadline."""
 
 
 class PacedModel(WrapperModel):
@@ -33,6 +42,9 @@ class PacedModel(WrapperModel):
         if _last_request_at is not None:
             wait = _last_request_at + self.interval - time.monotonic()
             if wait > 0:
+                remaining = remaining_seconds.get()
+                if remaining is not None and wait > remaining():
+                    raise PacingDeadlineError(f"request pacing wait {wait:g}s exceeds remaining deadline")
                 await asyncio.sleep(wait)
         _last_request_at = time.monotonic()
         return await super().request(messages, model_settings, model_request_parameters)

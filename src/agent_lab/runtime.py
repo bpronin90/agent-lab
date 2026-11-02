@@ -18,7 +18,9 @@ from pydantic_ai.usage import RunUsage
 
 from agent_lab.agents import REGISTRY, AgentSpec
 from agent_lab.config import Settings
-from agent_lab.models import ProviderConfigError, build_model, build_model_settings, model_names
+from agent_lab.models import (
+    PacingDeadlineError, ProviderConfigError, build_model, build_model_settings, model_names, remaining_seconds,
+)
 from agent_lab.schemas import AttemptRecord, ErrorClass, RunRecord, ToolCallRecord
 from agent_lab.tooling import ToolExecutionError, track_tools
 
@@ -36,7 +38,7 @@ def classify(exc: BaseException) -> ErrorClass:
         return "config"
     if isinstance(exc, ToolExecutionError):
         return "tool"
-    if isinstance(exc, UsageLimitExceeded):
+    if isinstance(exc, (UsageLimitExceeded, PacingDeadlineError)):
         return "limit"
     if isinstance(exc, ModelHTTPError):
         if exc.status_code in (408, 429) or exc.status_code >= 500:
@@ -128,6 +130,7 @@ def run_agent(prompt: str, settings: Settings, agent_name: str = "demo") -> RunR
             if usage.requests >= settings.max_requests:
                 return _failed(base, attempts, messages, executed, spec, "limit", "request limit exhausted across attempts", usage)
             requests_before = usage.requests
+            token = remaining_seconds.set(lambda: deadline - _monotonic())
             try:
                 with track_tools() as executed, capture_run_messages() as messages:
                     agent = spec.build(build_model(settings, model_name))
@@ -157,6 +160,8 @@ def run_agent(prompt: str, settings: Settings, agent_name: str = "demo") -> RunR
                     _sleep(wait)
                     continue
                 break
+            finally:
+                remaining_seconds.reset(token)
             attempts.append(AttemptRecord(model=model_name))
             all_messages = result.all_messages()
             return RunRecord(

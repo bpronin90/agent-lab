@@ -639,3 +639,26 @@ def test_stitched_ellipsis_quote_is_rejected():
     f["evidence_quote"] = src[:40] + " ... " + src[-40:]
     report = verify_dossier(CalmDownDossier.model_validate(d), sources)
     assert not report.ok and any(r.item == f["id"] and "verbatim" in r.reason for r in report.rejected)
+
+
+def test_pacing_wait_beyond_deadline_fails_as_limit_without_sending(monkeypatch):
+    """Review finding on #15: pacing must not sleep past the run deadline and then still send."""
+    import dataclasses
+    from agent_lab import models
+
+    sent = []
+
+    def model(messages, info):
+        sent.append(1)
+        return ModelResponse(parts=[TextPart(json.dumps(load_mock_dossier()))])
+
+    now = [0.0]
+    monkeypatch.setattr(models, "_last_request_at", now[0])
+    monkeypatch.setattr(models.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(runtime, "_monotonic", lambda: now[0])
+    paced = lambda s, m=None: models.PacedModel(FunctionModel(model, model_name="p"), 13)  # noqa: E731
+    monkeypatch.setattr(runtime, "build_model", paced)
+    settings = dataclasses.replace(OFFLINE, deadline_seconds=1)
+    record = runtime.run_agent(FEAR, settings, "calm_down")
+    assert record.status == "failed" and record.error_class == "limit"
+    assert sent == []

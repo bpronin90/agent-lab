@@ -46,6 +46,8 @@ class PacedModel(WrapperModel):
                 if remaining is not None and wait > remaining():
                     raise PacingDeadlineError(f"request pacing wait {wait:g}s exceeds remaining deadline")
                 await asyncio.sleep(wait)
+                if remaining is not None and remaining() <= 0:  # the sleep itself may overshoot
+                    raise PacingDeadlineError("run deadline passed while waiting for request pacing")
         _last_request_at = time.monotonic()
         return await super().request(messages, model_settings, model_request_parameters)
 

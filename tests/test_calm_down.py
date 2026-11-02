@@ -662,3 +662,26 @@ def test_pacing_wait_beyond_deadline_fails_as_limit_without_sending(monkeypatch)
     record = runtime.run_agent(FEAR, settings, "calm_down")
     assert record.status == "failed" and record.error_class == "limit"
     assert sent == []
+
+
+def test_pacing_sleep_overshooting_deadline_does_not_send(monkeypatch):
+    import asyncio
+    from agent_lab import models
+
+    now = [0.0]
+
+    async def slow_sleep(s):
+        now[0] += s + 0.1  # wakes after the deadline
+
+    sent = []
+    monkeypatch.setattr(models, "_last_request_at", 0.0)
+    monkeypatch.setattr(models.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(models.asyncio, "sleep", slow_sleep)
+    paced = models.PacedModel(FunctionModel(lambda m, i: sent.append(1) or ModelResponse(parts=[TextPart("x")])), 13)
+    token = models.remaining_seconds.set(lambda: 13.05 - now[0])
+    try:
+        with pytest.raises(models.PacingDeadlineError):
+            asyncio.run(paced.request([], None, __import__("pydantic_ai.models", fromlist=["x"]).ModelRequestParameters()))
+    finally:
+        models.remaining_seconds.reset(token)
+    assert sent == []

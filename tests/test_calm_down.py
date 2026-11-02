@@ -6,7 +6,7 @@ import re
 
 import httpx
 import pytest
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
 from agent_lab import runtime
@@ -181,13 +181,38 @@ def test_failed_run_writes_limitation_not_email(tmp_path, monkeypatch):
 def test_model_citing_unread_sources_gets_no_email(tmp_path, monkeypatch):
     """A model that skips reading and cites from 'memory' is blocked."""
     def lazy(messages, info):
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, load_mock_dossier())])
+        return ModelResponse(parts=[TextPart(json.dumps(load_mock_dossier()))])
 
     monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(lazy, model_name="lazy"))
     result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
     assert result.record.status == "succeeded" and not result.ok
     assert not (tmp_path / "email.html").exists()
     assert "not read" in (tmp_path / "research-dossier.md").read_text()
+
+
+def test_dossier_schema_is_prompted_not_sent_as_a_function_schema(tmp_path, monkeypatch):
+    """Gemini rejects the dossier as a function-call schema ("too many states"), so it is sent as prompt text."""
+    seen = {}
+
+    def spy(messages, info):
+        seen["output_tools"] = list(info.output_tools)
+        return ModelResponse(parts=[TextPart(json.dumps(load_mock_dossier()))])
+
+    monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(spy, model_name="spy"))
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    assert seen["output_tools"] == []
+
+
+def test_malformed_model_reply_fails_closed(tmp_path, monkeypatch):
+    def garbage(messages, info):
+        return ModelResponse(parts=[TextPart("not json at all")])
+
+    monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(garbage, model_name="garbage"))
+    monkeypatch.setattr(runtime, "_sleep", lambda s: None)
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    assert result.record.status == "failed" and not result.ok
+    assert not (tmp_path / "email.html").exists() and not (tmp_path / "bundle.json").exists()
+    assert (tmp_path / "LIMITATION.md").exists()
 
 
 def test_cli_calm_down_exit_codes(tmp_path, monkeypatch, capsys):
@@ -571,3 +596,46 @@ def test_finalize_into_missing_directory_creates_nothing(tmp_path):
     with pytest.raises(ValueError):
         finalize_calm_down(target, fixture_review())
     assert not target.exists()
+
+
+# ---------------------------------------------------------------- request pacing (Gemini free tier)
+
+def test_paced_model_spaces_requests(monkeypatch):
+    import asyncio
+    from agent_lab import models
+
+    now = [100.0]
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+        now[0] += s
+
+    monkeypatch.setattr(models.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(models.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(models, "_last_request_at", None)
+    paced = models.PacedModel(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), 13)
+    for _ in range(3):
+        asyncio.run(paced.request([], None, paced.wrapped.customize_request_parameters(
+            __import__("pydantic_ai.models", fromlist=["ModelRequestParameters"]).ModelRequestParameters())))
+    assert slept == [13, 13]  # first request is immediate, later ones wait out the interval
+
+
+def test_pacing_setting_validated_and_research_default():
+    with pytest.raises(ValueError):
+        Settings.from_env({"AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS": "-1"})
+    assert Settings.from_env({}).min_request_interval_seconds == 0
+    assert research_settings(Settings.from_env({}), env={}).min_request_interval_seconds == 13
+    assert research_settings(Settings.from_env({"AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS": "2"}),
+                             env={"AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS": "2"}).min_request_interval_seconds == 2
+
+
+def test_stitched_ellipsis_quote_is_rejected():
+    """Live Gemini joined two passages with '...'; that is not a verbatim excerpt."""
+    sources = read_all_fixture_sources()
+    d = load_mock_dossier()
+    f = d["findings"][0]
+    src = sources[f["source_ids"][0]].text
+    f["evidence_quote"] = src[:40] + " ... " + src[-40:]
+    report = verify_dossier(CalmDownDossier.model_validate(d), sources)
+    assert not report.ok and any(r.item == f["id"] and "verbatim" in r.reason for r in report.rejected)

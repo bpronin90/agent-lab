@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 from pydantic_ai.models import Model
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 
 from agent_lab.config import Settings
@@ -11,6 +15,27 @@ from agent_lab.mock_provider import MOCK_MODEL_NAME, build_mock_model
 
 class ProviderConfigError(RuntimeError):
     """Raised when a provider is selected but not configured."""
+
+
+_last_request_at: float | None = None
+
+
+class PacedModel(WrapperModel):
+    """Spaces model requests at least `interval` seconds apart so a multi-step research run
+    stays under the Gemini free tier's per-minute request limit. It only delays; it never retries."""
+
+    def __init__(self, wrapped: Model, interval: float):
+        super().__init__(wrapped)
+        self.interval = interval
+
+    async def request(self, messages, model_settings, model_request_parameters):
+        global _last_request_at
+        if _last_request_at is not None:
+            wait = _last_request_at + self.interval - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+        _last_request_at = time.monotonic()
+        return await super().request(messages, model_settings, model_request_parameters)
 
 
 def model_names(settings: Settings) -> list[str]:
@@ -33,7 +58,10 @@ def build_model(settings: Settings, model_name: str | None = None) -> Model:
         from pydantic_ai.models.google import GoogleModel
         from pydantic_ai.providers.google import GoogleProvider
 
-        return GoogleModel(model_name or settings.gemini_model, provider=GoogleProvider(api_key=settings.gemini_api_key))
+        model = GoogleModel(model_name or settings.gemini_model, provider=GoogleProvider(api_key=settings.gemini_api_key))
+        if settings.min_request_interval_seconds > 0:
+            return PacedModel(model, settings.min_request_interval_seconds)
+        return model
     raise ProviderConfigError(f"Unknown provider {settings.provider!r}")
 
 

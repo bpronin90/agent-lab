@@ -1,0 +1,42 @@
+# Identity n8n uses to talk to the Kubernetes API. Namespace-scoped Role only:
+# no ClusterRole, no secrets, no exec, no pod creation outside a Job.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: n8n-job-runner
+  namespace: agent-lab
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: n8n-job-runner
+  namespace: agent-lab
+rules:
+  # Submit a Job, poll its status, delete it when n8n gives up waiting.
+  # `create jobs` would let a caller run any pod, so admission-policy.yaml
+  # restricts what these Jobs may contain.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "delete"]
+  # Find the Job's pod and read the agent's JSON run record from its log.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: n8n-job-runner
+  namespace: agent-lab
+subjects:
+  - kind: ServiceAccount
+    name: n8n-job-runner
+    namespace: agent-lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: n8n-job-runner

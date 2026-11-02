@@ -1,0 +1,134 @@
+{
+  "id": "AgLabK8sExperim1",
+  "name": "Agent Lab — n8n + k8s experiment",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Run experiment",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edit these to try your own prompts. Each item becomes one Kubernetes Job.\nreturn [\n  { scenario: 'success', prompt: 'What is (12+30)*2 and what is kubernetes?' },\n  { scenario: 'limit', prompt: 'What is (12+30)*2?' },\n  { scenario: 'timeout', prompt: 'What is (12+30)*2 and what is docker?' },\n  // Security probes: a hostile prompt runs as plain text, a bad scenario never reaches Kubernetes.\n  { scenario: 'success', prompt: '--agent=evil; $(rm -rf /) `id` what is 2+2' },\n  { scenario: 'cluster-admin', prompt: 'anything' },\n].map((json) => ({ json }));"
+      },
+      "name": "Scenarios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AgLabK8sJobRun01",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "prompt": "={{ $json.prompt }}",
+            "scenario": "={{ $json.scenario }}"
+          },
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true,
+          "schema": [
+            {
+              "id": "prompt",
+              "displayName": "prompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "scenario",
+              "displayName": "scenario",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "name": "Run agent Job",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item, i) => {\n  const r = item.json;\n  const asked = $('Scenarios').all()[i].json;\n  if (r.error || !r.outcome) {\n    return { json: { scenario: asked.scenario, outcome: 'REJECTED by n8n before Kubernetes', detail: r.error ?? r } };\n  }\n  return { json: { scenario: r.scenario, outcome: r.outcome, job: r.job.name, reason: r.job.reason,\n                   exitCode: r.pod.exitCode, error_class: r.agent?.error_class ?? null,\n                   answer: r.agent?.output?.answer ?? null, polls: r.job.polls, seconds: r.job.elapsedSeconds } };\n});"
+      },
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Run experiment": {
+      "main": [
+        [
+          {
+            "node": "Scenarios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scenarios": {
+      "main": [
+        [
+          {
+            "node": "Run agent Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent Job": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "tags": []
+}

@@ -117,6 +117,11 @@ if [[ "$*" == *headRefOid* ]]; then
   head -n1 "$FAKE_HEADS"
   if [[ $(wc -l <"$FAKE_HEADS") -gt 1 ]]; then sed -i 1d "$FAKE_HEADS"; fi
 elif [[ "$*" == *"pr diff"* ]]; then echo "diff --git a/x b/x"
+elif [[ "$*" == *"--jq .body"* ]]; then printf '%s\n' "${FAKE_BODY-Issue: #12}"
+elif [[ "$1" == issue ]]; then
+  [[ "${ISSUE_FAIL:-}" == 1 ]] && { echo "gh: no such issue" >&2; exit 1; }
+  echo "$*" >>"$GH_LOG"; echo '{"number":12}'
+elif [[ "$1" == api ]]; then echo "$*" >>"$GH_LOG"; echo '[]'
 else echo '{"title":"t"}'; fi
 EOF
 cat >"$cshim/codex" <<'EOF'
@@ -142,7 +147,7 @@ chmod +x "$cshim/gh" "$cshim/codex"
 run_review() { # run_review <pr> <sha> [heads...]; prints exit code
   local pr="$1" sha="$2"; shift 2
   printf '%s\n' "$@" >"$tmp/heads"
-  PATH="$cshim:$PATH" FAKE_HEADS="$tmp/heads" FAKE_SHA="$good" FAKE_OTHER="$other" CODEX_ARGS="$tmp/codex.args" \
+  PATH="$cshim:$PATH" GH_LOG="$tmp/gh.log" FAKE_HEADS="$tmp/heads" FAKE_SHA="$good" FAKE_OTHER="$other" CODEX_ARGS="$tmp/codex.args" \
     "$review" "$pr" "$sha" >"$tmp/review.out" 2>"$tmp/review.err"
   echo $?
 }
@@ -162,6 +167,14 @@ expect 3 "$(CODEX_MODE=fail run_review 7 "$good" "$good")" "review: codex failur
 expect 3 "$(CODEX_MODE=empty run_review 7 "$good" "$good")" "review: empty review rejected"
 expect 3 "$(CODEX_MODE=noverdict run_review 7 "$good" "$good")" "review: review without VERDICT record rejected"
 expect 3 "$(run_review 7 "$good" "$good" "$other")" "review: head moved during review rejected"
+rm -f "$tmp/gh.log"
+run_review 7 "$good" "$good" >/dev/null
+grep -q "issue view 12" "$tmp/gh.log" && echo "ok   review: linked issue contract fetched for the reviewer" || { echo "FAIL review: issue not fetched"; fails=$((fails + 1)); }
+grep -q "commits/$good/check-runs" "$tmp/gh.log" && echo "ok   review: CI check runs fetched for the exact SHA" || { echo "FAIL review: check runs not fetched by SHA"; fails=$((fails + 1)); }
+expect 3 "$(ISSUE_FAIL=1 run_review 7 "$good" "$good")" "review: unreadable issue is an error"
+expect 3 "$(FAKE_BODY='no issue line' run_review 7 "$good" "$good")" "review: PR body without Issue line rejected"
+expect 3 "$(FAKE_BODY=$'Issue: #1\nIssue: #2' run_review 7 "$good" "$good")" "review: PR body with two Issue lines rejected"
+expect 0 "$(FAKE_BODY='Issue: none' run_review 7 "$good" "$good")" "review: 'Issue: none' accepted without an issue fetch"
 expect 3 "$(CODEX_MODE=badverdict run_review 7 "$good" "$good")" "review: unknown verdict word rejected"
 expect 3 "$(CODEX_MODE=wrongpr run_review 7 "$good" "$good")" "review: record for another PR rejected"
 expect 3 "$(CODEX_MODE=wrongsha run_review 7 "$good" "$good")" "review: record for another commit rejected"

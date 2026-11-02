@@ -276,8 +276,8 @@ def test_cli_exit_codes(tmp_path, monkeypatch, fake_clock):
     assert main(["run", "hi"]) == 1
 
 
-def test_registry_contains_only_demo():
-    assert sorted(REGISTRY) == ["demo"]
+def test_registry_contains_expected_agents():
+    assert sorted(REGISTRY) == ["calm_down", "demo"]
 
 
 # --- review fixes: fallback after tools, and run-wide usage limits ---------------------

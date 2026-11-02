@@ -58,6 +58,11 @@ def _plan_tool_calls(prompt: str, available: set[str]) -> list[ToolCallPart]:
 
 
 def mock_response(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    if "read_source" in {t.name for t in info.function_tools}:
+        # The Calm Down agent gets its own deterministic fixture script (imported lazily).
+        from agent_lab.agents.calm_down.mock_script import calm_down_mock_response
+
+        return calm_down_mock_response(messages, info)
     returns = _tool_returns(messages)
     if not returns:
         calls = _plan_tool_calls(_latest_prompt(messages), {t.name for t in info.function_tools})

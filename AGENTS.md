@@ -14,8 +14,11 @@ anything they do not permit is not permitted.
 
 Rules that hold in every environment:
 
-- Before any implementation branch, edit, or worktree, require an owner comment
-  `START` on the issue naming the task. An existing issue, "finish this up", and
+- Before any implementation branch, edit, or worktree, require owner START for
+  the issue: the owner's own message `implement #<n>` (implement through
+  independent review; no merge) or `carry #<n>` (implement, then merge and close
+  under the merge conditions). The agent records it on the issue as a comment
+  relayed at owner request. An existing issue, "finish this up", and
   "keep going" are not START. Issue-free maintenance requires an explicit owner
   START naming that task; read-only analysis requires no START.
 - Work on a branch, never on the default branch. Never commit or push to the default

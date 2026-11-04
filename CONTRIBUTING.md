@@ -13,9 +13,13 @@ before a change lands.
 
 If you are unsure whether work is substantive, treat it as substantive.
 
-- Before any implementation branch, edit, or worktree, require an owner issue
-  comment `START` naming the task. Issue existence, "finish this up", and
-  "keep going" are not START. For issue-free maintenance, require an explicit
+- Before any implementation branch, edit, or worktree, require owner START for
+  the issue: the owner's own message `implement #<n>` (implement, hand off, and
+  obtain the independent review; no merge without a separate owner go-ahead) or
+  `carry #<n>` (the same, then merge under "Review And Merge", closing the issue
+  via `Closes #<n>`). The agent records it on the issue as a short comment
+  relaying the owner's words, marked as relayed at owner request. Issue
+  existence, "finish this up", and "keep going" are not START. For issue-free maintenance, require an explicit
   owner START naming that task. Read-only analysis requires no START.
 - Branch off `main` and open the pull request against `main`. Never commit or
   push to `main` directly, and never force-push a shared branch.

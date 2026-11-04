@@ -107,6 +107,50 @@ all carry a FIXTURE PREVIEW banner. The offline tests do not validate live resea
 Some fixture figures are older vintages: newer releases of the Stanford payroll study and the BLS outlook report different numbers, and the legal-hallucination figures are pinned to arXiv v1. A live edition has not been produced yet. It needs owner authorization (live Gemini runs spend free-tier quota),
 a `GEMINI_API_KEY`, and network egress to OpenAlex and the allowlisted hosts.
 
+## Claude CLI execution core (disabled)
+
+`src/agent_lab/claude_cli.py` is an internal core for running `claude -p` under the existing
+Claude subscription (#17). **Nothing uses it yet.** `AGENT_LAB_PROVIDER` does not accept it,
+mock stays the default, and Gemini is unchanged. Wiring it into Calm Down is a separate issue (#21).
+
+- **Launch gate.** Every launch requires `AGENT_LAB_ALLOW_CLAUDE_CLI=1` and is refused if `CI` or
+  `KUBERNETES_SERVICE_HOST` is set, even to an empty value. A refused launch starts nothing and is a
+  `config` failure. This catches accidental use in marked environments only. It cannot detect cron,
+  prove a human is present, verify GitHub comments, or resist someone who controls the environment.
+  Scheduled or unattended use stays prohibited by policy.
+- **Per-call authorization.** Each live invocation needs its own owner `AUTHORIZE_LIVE_CLAUDE` comment
+  on #17 plus the OWNER AUTHORIZATION RECORD in `CONTRIBUTING.md`. A launched call consumes that
+  authorization even if it fails. Use is existing-subscription only: no API billing, paid overage, or
+  automatic paid fallback. The expected live use is one research run of about 5,000 output tokens.
+- **Subprocess boundary.** Argument array, no shell, prompt on stdin, a fresh empty temporary working
+  directory, and
+  `claude -p --output-format json --tools "" --no-session-persistence --disable-slash-commands --setting-sources "" --model <model>`.
+  The model is always explicit. Only an allowlist of environment variables (`ENV_ALLOWLIST`: path,
+  home, user, locale, XDG directories, `CLAUDE_CONFIG_DIR`) reaches the CLI so it can find the existing
+  login. API keys, model overrides and other secrets are dropped. Credentials are never copied or changed.
+  These controls are not an OS sandbox.
+- **Guarantees.** One context holds one request allowance and one monotonic deadline for every call.
+  A call counts once it has spawned, failed or not. Usage the CLI does not report is marked unavailable,
+  never counted as zero. There is no retry, fallback, repair or automatic login, and rate-limit
+  guidance never triggers another launch. stdout and stderr are drained concurrently under byte caps.
+  A timeout or overflow kills and reaps the whole process group, and the temporary directory is
+  always removed.
+- **Token limit is after the fact.** Reported output tokens are checked against the per-response
+  allowance *after* the response arrives. That cannot stop the service from producing more; there is
+  no hard service-side token cap.
+- **Classification.** Gate, missing binary or login, and unsupported flags → `config`; explicit
+  service or rate failures → `transient`; deadline, output bytes, tokens or request allowance → `limit`;
+  malformed envelope, generated JSON or schema mismatch → `validation`; error envelopes with exit 0,
+  unrecognized exits and unexpected exceptions → `internal`.
+- **Records.** `run_with_record` returns a `RunRecord` on success and on every caught failure, with
+  `git_sha`, a secret-free `config_hash` (model, bounds, launch policy, instructions), per-call attempts
+  and partial accounting. Records hold fixed diagnostic codes and a caller-supplied prompt descriptor,
+  never raw prompts, stdout, stderr, credentials or exception text. If the host is killed or storage
+  fails, the record can still be lost.
+
+Tests (`tests/test_claude_cli.py`) run a generated fake `claude` executable offline. They do not prove
+the installed CLI's flags, native login, subscription billing behavior, or a live research run.
+
 ## Kubernetes / n8n
 
 No new infrastructure is needed. The existing image and Job pattern work: override the container args with

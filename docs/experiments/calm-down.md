@@ -85,6 +85,7 @@ agent-lab calm-down-finalize calm-down-live --review review.json
 
 Live retrieval with the mock provider is refused, so fixture text can never be mixed into a live edition.
 Unless you set them, research runs use larger bounds: 16 requests, 30 tool calls, 8192 output tokens, and a 300 s deadline.
+Model requests are paced 13 s apart (`AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS`) to stay under Gemini's free-tier limit of 5 requests per minute. The free tier also caps requests per day per model (20 on `gemini-2.5-flash` at the time of writing), so expect about one live research run per day. The dossier schema is sent as prompt text (`PromptedOutput`) because Gemini rejects it as a function-call schema; it is still fully validated locally.
 
 Exit codes: `0` edition rendered (finalize), `4` research insufficient, `5` waiting for human support review (dossier only in both cases), and otherwise the usual runtime codes (`2` config, `3` transient, `1` other).
 

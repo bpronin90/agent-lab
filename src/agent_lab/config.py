@@ -28,6 +28,8 @@ class Settings:
     # within an overall wall-clock deadline.
     max_attempts: int = 3
     deadline_seconds: int = 120
+    # Minimum gap between model requests (Gemini free tier allows ~5 per minute). 0 = no pacing.
+    min_request_interval_seconds: float = 0
     git_sha: str = "unknown"
     run_log_dir: Path = Path("runs")
 
@@ -47,6 +49,8 @@ class Settings:
             max_output_tokens=_positive_int(env, "AGENT_LAB_MAX_OUTPUT_TOKENS", cls.max_output_tokens),
             max_attempts=_positive_int(env, "AGENT_LAB_MAX_ATTEMPTS", cls.max_attempts),
             deadline_seconds=_positive_int(env, "AGENT_LAB_DEADLINE_SECONDS", cls.deadline_seconds),
+            min_request_interval_seconds=_non_negative_float(
+                env, "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS", cls.min_request_interval_seconds),
             git_sha=env.get("AGENT_LAB_GIT_SHA") or env.get("GITHUB_SHA") or cls.git_sha,
             run_log_dir=Path(env.get("AGENT_LAB_RUN_LOG_DIR", str(cls.run_log_dir))),
         )
@@ -65,4 +69,14 @@ def _positive_int(env: dict[str, str], key: str, default: int) -> int:
     value = int(raw)
     if value < 1:
         raise ValueError(f"{key} must be >= 1, got {value}")
+    return value
+
+
+def _non_negative_float(env: dict[str, str], key: str, default: float) -> float:
+    raw = env.get(key)
+    if raw is None or raw == "":
+        return default
+    value = float(raw)
+    if not 0 <= value <= 120:
+        raise ValueError(f"{key} must be between 0 and 120, got {value}")
     return value

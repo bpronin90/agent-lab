@@ -38,6 +38,8 @@ RESEARCH_DEFAULTS = {
     "AGENT_LAB_MAX_TOOL_CALLS": ("max_tool_calls", 30),
     "AGENT_LAB_MAX_OUTPUT_TOKENS": ("max_output_tokens", 8192),
     "AGENT_LAB_DEADLINE_SECONDS": ("deadline_seconds", 300),
+    # Gemini free tier: ~5 requests/minute. Pacing keeps a 10+ step research loop under it.
+    "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS": ("min_request_interval_seconds", 13.0),
 }
 
 # Research owns every generated file; finalize owns only the email outputs and LIMITATION.md.

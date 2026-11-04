@@ -118,6 +118,9 @@ if [[ "$*" == *headRefOid* ]]; then
   if [[ $(wc -l <"$FAKE_HEADS") -gt 1 ]]; then sed -i 1d "$FAKE_HEADS"; fi
 elif [[ "$*" == *"pr diff"* ]]; then echo "diff --git a/x b/x"
 elif [[ "$*" == *"--jq .body"* ]]; then printf '%s\n' "${FAKE_BODY-Issue: #12}"
+elif [[ "$*" == *"--json number,title,body,comments"* && "$1" == pr ]]; then
+  [[ "${PRC_FAIL:-}" == 1 ]] && { echo "gh: simulated failure" >&2; exit 1; }
+  echo '{"body":"Issue: none PRBODYMARK","comments":[{"body":"UPDATE=IMPLEMENTED PRCOMMENTMARK"}]}'
 elif [[ "$1" == issue ]]; then
   [[ "${ISSUE_FAIL:-}" == 1 ]] && { echo "gh: no such issue" >&2; exit 1; }
   echo "$*" >>"$GH_LOG"; echo '{"number":12}'
@@ -128,6 +131,8 @@ cat >"$cshim/codex" <<'EOF'
 #!/usr/bin/env bash
 # Records its argv, fails fast if stdin is not closed, then writes the review per $CODEX_MODE.
 echo "$*" >"$CODEX_ARGS"
+ev="$(grep -o '/[^ ]*issue\.json' <<<"$*" | head -n1)"
+[[ -n "${CODEX_EVIDENCE:-}" && -f "$ev" ]] && cp "$ev" "$CODEX_EVIDENCE"
 if read -r -t 2 _; then :; else [[ $? -gt 128 ]] && { echo "stdin left open" >&2; exit 9; }; fi
 while [[ $# -gt 0 ]]; do [[ "$1" == --output-last-message ]] && out="$2"; shift; done
 case "${CODEX_MODE:-ok}" in
@@ -174,7 +179,13 @@ grep -q "commits/$good/check-runs" "$tmp/gh.log" && echo "ok   review: CI check 
 expect 3 "$(ISSUE_FAIL=1 run_review 7 "$good" "$good")" "review: unreadable issue is an error"
 expect 3 "$(FAKE_BODY='no issue line' run_review 7 "$good" "$good")" "review: PR body without Issue line rejected"
 expect 3 "$(FAKE_BODY=$'Issue: #1\nIssue: #2' run_review 7 "$good" "$good")" "review: PR body with two Issue lines rejected"
-expect 0 "$(FAKE_BODY='Issue: none' run_review 7 "$good" "$good")" "review: 'Issue: none' accepted without an issue fetch"
+rm -f "$tmp/gh.log" "$tmp/evidence.json"
+expect 0 "$(FAKE_BODY='Issue: none' CODEX_EVIDENCE="$tmp/evidence.json" run_review 7 "$good" "$good")" "review: 'Issue: none' accepted without an issue fetch"
+! grep -q "issue view" "$tmp/gh.log" 2>/dev/null && echo "ok   review: issue-free PR fetches no issue" || { echo "FAIL review: issue fetched for Issue: none"; fails=$((fails + 1)); }
+grep -q PRBODYMARK "$tmp/evidence.json" && grep -q PRCOMMENTMARK "$tmp/evidence.json" \
+  && echo "ok   review: issue-free evidence has PR body and handoff comments" || { echo "FAIL review: issue-free evidence lacks PR body/comments"; fails=$((fails + 1)); }
+expect 3 "$(PRC_FAIL=1 FAKE_BODY='Issue: none' run_review 7 "$good" "$good")" "review: unreadable PR body/comments for Issue: none is an error"
+expect 2 "$(FAKE_BODY='Issue: none' run_review 7 "$good" "$other")" "review: Issue: none still refuses a head mismatch"
 expect 3 "$(CODEX_MODE=badverdict run_review 7 "$good" "$good")" "review: unknown verdict word rejected"
 expect 3 "$(CODEX_MODE=wrongpr run_review 7 "$good" "$good")" "review: record for another PR rejected"
 expect 3 "$(CODEX_MODE=wrongsha run_review 7 "$good" "$good")" "review: record for another commit rejected"

@@ -14,18 +14,38 @@ anything they do not permit is not permitted.
 
 Rules that hold in every environment:
 
+- Before any implementation branch, edit, or worktree, require an owner comment
+  `START` on the issue naming the task. An existing issue, "finish this up", and
+  "keep going" are not START. Issue-free maintenance requires an explicit owner
+  START naming that task; read-only analysis requires no START.
 - Work on a branch, never on the default branch. Never commit or push to the default
   branch. Never force-push a shared branch unless the owner explicitly directs it.
 - Never reset, clean, stash away, or overwrite uncommitted work you did not create. If
   the checkout is dirty, work in a separate worktree.
 - Stage explicit paths only (no `git add -A`, `git add .`, or `git commit -a`).
 - Every PR body contains exactly one standalone `Issue: #<n>` or `Issue: none` line
-  and the contract headings from `CONTRIBUTING.md`. Change only the Allowed Files, plus docs your change
-  makes untrue, and run `bash scripts/check-scope.sh --allowed <path> ...` before handoff.
+  and the contract headings from `CONTRIBUTING.md`. Change only the Allowed Files.
+  Before work outside them, require an owner issue comment `APPROVED` naming the
+  added paths; an agent's proposed amendment is not approval. For issue-free work,
+  require the same owner approval on its contract. Include necessary doc changes
+  in the approved scope. Run `bash scripts/check-scope.sh --allowed <path> ...`
+  before handoff using that scope.
 - Merge a PR only under the merge conditions in `CONTRIBUTING.md`. Never close issues
   (other than through a merged PR's `Closes #n`), deploy, release, change repository
-  settings or visibility, touch credentials or secrets, or cause external side effects.
-  Only the owner does these, and an ambiguous "looks good" is not authorization.
+  settings or visibility, touch credentials or secrets, or cause external side effects
+  without the applicable owner authorization in `CONTRIBUTING.md`.
+  An ambiguous "looks good" is not authorization.
+- Live model calls, and any external side effect outside an owner-started task, require
+  the OWNER AUTHORIZATION RECORD in `CONTRIBUTING.md`. Announce each live batch before
+  running it and stay within its cap, including failed calls and retries. START alone
+  is not this record.
+- Post Codex-drafted text only when the owner asked for that text to be posted;
+  review relays additionally follow the review rules below.
+- Send email only with per-send written owner authorization naming the recipient
+  and exact files. Never put the owner's private contact details in issues, PRs,
+  commits, or tracked files.
+- A new model provider or paid-quota source needs an issue contract reconciling it
+  with "Zero incremental cost"; an existing subscription is not authorization.
 - Do not review or approve a head you produced.
 - If an independent reviewer cannot post to GitHub, the owner, or an implementer the
   owner authorized, relays its complete review verbatim as described in `CONTRIBUTING.md`.

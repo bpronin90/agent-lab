@@ -8,6 +8,10 @@
 `CLAUDE.local.md` hold the owner's fuller private protocol. They are Git-ignored,
 present only on the owner's machine, and loaded automatically when present.
 
+- Require owner START before an implementation branch, edit, or worktree, and
+  owner `APPROVED` before expanding Allowed Files. Follow `CONTRIBUTING.md` for
+  authorization records, capped live batches, Codex-draft posting, new providers,
+  and per-send email permission. Private notes cannot relax these requirements.
 - `.claude/settings.json` runs `.claude/hooks/guard-bash.py` before every Bash command.
   It blocks broad staging, commits and pushes to the default branch, force pushes,
   `reset --hard`, `clean -f`, and `gh pr merge --admin`. If it blocks a command, fix the

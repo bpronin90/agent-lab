@@ -8,6 +8,9 @@ also a hands-on way to learn Docker and Kubernetes.
   the structured output.
 - **Models:** Gemini free tier (`AGENT_LAB_PROVIDER=gemini`), or a deterministic **mock**
   provider (the default) that works offline with no credentials.
+  Calm Down research alone can also run manually through the Claude CLI on an existing
+  subscription (`AGENT_LAB_PROVIDER=claude-cli`, two gated launches); see
+  [docs/experiments/calm-down.md](docs/experiments/calm-down.md).
 - **Demo agent:** three safe tools (`calculate`, `current_time`, `lookup_note`). None of them
   touches the network or the filesystem.
 - **Packaging:** Docker image and Docker Compose for local development.

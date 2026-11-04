@@ -10,7 +10,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-PROVIDERS = ("mock", "gemini")
+# "claude-cli" is accepted only by the Calm Down research pipeline (#21); every other
+# entry point refuses it in the model factory before any subprocess or network activity.
+PROVIDERS = ("mock", "gemini", "claude-cli")
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,11 @@ class Settings:
     deadline_seconds: int = 120
     # Minimum gap between model requests (Gemini free tier allows ~5 per minute). 0 = no pacing.
     min_request_interval_seconds: float = 0
+    # Claude CLI (Calm Down only). No default model: the operator must name it explicitly.
+    # Output allocations are per phase and checked after each response, not service-enforced.
+    claude_model: str | None = None
+    claude_plan_output_tokens: int = 1000
+    claude_synthesis_output_tokens: int = 4000
     git_sha: str = "unknown"
     run_log_dir: Path = Path("runs")
 
@@ -51,14 +58,21 @@ class Settings:
             deadline_seconds=_positive_int(env, "AGENT_LAB_DEADLINE_SECONDS", cls.deadline_seconds),
             min_request_interval_seconds=_non_negative_float(
                 env, "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS", cls.min_request_interval_seconds),
+            claude_model=(env.get("AGENT_LAB_CLAUDE_MODEL") or "").strip() or None,
+            claude_plan_output_tokens=_positive_int(
+                env, "AGENT_LAB_CLAUDE_PLAN_OUTPUT_TOKENS", cls.claude_plan_output_tokens),
+            claude_synthesis_output_tokens=_positive_int(
+                env, "AGENT_LAB_CLAUDE_SYNTHESIS_OUTPUT_TOKENS", cls.claude_synthesis_output_tokens),
             git_sha=env.get("AGENT_LAB_GIT_SHA") or env.get("GITHUB_SHA") or cls.git_sha,
             run_log_dir=Path(env.get("AGENT_LAB_RUN_LOG_DIR", str(cls.run_log_dir))),
         )
 
 
     def public_dict(self) -> dict[str, object]:
-        """Settings that shape a run, without secrets. Used for the run's config_hash."""
-        data = {k: v for k, v in self.__dict__.items() if k not in ("gemini_api_key", "git_sha", "run_log_dir")}
+        """Settings that shape a run, without secrets. Used for the run's config_hash.
+        Claude CLI settings are excluded here; that path hashes its own configuration."""
+        data = {k: v for k, v in self.__dict__.items()
+                if k not in ("gemini_api_key", "git_sha", "run_log_dir") and not k.startswith("claude_")}
         return {k: str(v) if isinstance(v, Path) else v for k, v in data.items()}
 
 

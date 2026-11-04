@@ -335,3 +335,29 @@ def test_not_selectable_as_provider():
     assert Settings.from_env({}).provider == "mock"
     with pytest.raises(ValueError, match="AGENT_LAB_PROVIDER"):
         Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli"})
+
+
+def test_descendant_holding_pipes_after_parent_exit_respects_deadline(fake):
+    # The parent exits at once; a grandchild inherits stdout/stderr and sleeps far past the deadline.
+    body = ("import subprocess; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+            "stdout=sys.stdout, stderr=sys.stderr)")
+    record = run_with_record(ctx(fake(body=body), timeout=0.5), lambda x: x.call("p", Answer), agent_name="a",
+                             prompt_descriptor="d", instructions="i")
+    start = time.monotonic()
+    c = ctx(fake(body=body), timeout=0.5)
+    with pytest.raises(ClaudeCliError) as err:
+        c.call("p", Answer)
+    assert time.monotonic() - start < 5
+    assert (err.value.error_class, err.value.code) == ("limit", "deadline_exceeded")
+    assert record.status == "failed" and record.error_class == "limit" and record.requests == 1
+
+
+def test_descendant_without_pipes_is_reaped_on_success(fake, tmp_path):
+    marker = tmp_path / "survived"
+    child = tmp_path / "child.py"
+    child.write_text(f"import time\ntime.sleep(1.5)\nopen({str(marker)!r}, 'w').write('x')\n")
+    body = (f"import subprocess; subprocess.Popen([sys.executable, {str(child)!r}], "
+            f"stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)")
+    assert ctx(fake(body=body)).call("p", Answer) == Answer(answer="ok")
+    time.sleep(2)
+    assert not marker.exists()

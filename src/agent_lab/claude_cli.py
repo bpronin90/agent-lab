@@ -257,19 +257,29 @@ def _communicate(proc, stdin: bytes, timeout: float, max_out: int, max_err: int)
             if _monotonic() >= end:
                 raise ClaudeCliError("limit", "deadline_exceeded")
             overflow.wait(0.02)
+        # The parent exited, but a descendant may still hold the pipes open.
         for t in threads[1:]:
-            t.join(max(0.0, min(CLEANUP_SECONDS, end - _monotonic())))
+            t.join(max(0.0, end - _monotonic()))
         if overflow.is_set():
             raise ClaudeCliError("limit", "output_bytes_exceeded")
+        if any(t.is_alive() for t in threads[1:]):
+            raise ClaudeCliError("limit", "deadline_exceeded")
     except BaseException:
         _kill_group(proc)
         raise
     finally:
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            try:
-                stream.close()
-            except (OSError, ValueError):
-                pass
+        # Reap any descendants left in the group, then give readers a bounded chance to see EOF.
+        _kill_group(proc)
+        for t in threads:
+            t.join(CLEANUP_SECONDS / len(threads))
+        # Closing a stream a live thread still holds would block on its lock; leave those to the
+        # daemon threads rather than break the deadline.
+        for t, stream in zip(threads, (proc.stdin, proc.stdout, proc.stderr)):
+            if not t.is_alive():
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
     return bytes(buffers["out"]), bytes(buffers["err"]), proc.returncode
 
 

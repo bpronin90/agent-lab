@@ -8,8 +8,8 @@
 `CLAUDE.local.md` hold the owner's fuller private protocol. They are Git-ignored,
 present only on the owner's machine, and loaded automatically when present.
 
-- Require owner START (`implement #<n>` or `carry #<n>`, see the
-  `.claude/skills/` of the same names) before an implementation branch, edit, or worktree, and
+- Require owner START (`implement #<n>` or `carry #<n>`, as defined in `AGENTS.md`)
+  before an implementation branch, edit, or worktree, and
   owner `APPROVED` before expanding Allowed Files. Follow `CONTRIBUTING.md` for
   authorization records, capped live batches, Codex-draft posting, new providers,
   and per-send email permission. Private notes cannot relax these requirements.

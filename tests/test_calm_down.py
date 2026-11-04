@@ -685,3 +685,22 @@ def test_pacing_sleep_overshooting_deadline_does_not_send(monkeypatch):
     finally:
         models.remaining_seconds.reset(token)
     assert sent == []
+
+
+def test_instruction_length_budgets_stay_under_schema_limits():
+    """Live Gemini ignored the schema's maxLength (subtitle > 140) on every retry, so the budgets are stated in the prompt."""
+    import re
+    from agent_lab.agents.calm_down import INSTRUCTIONS
+    from agent_lab.agents.calm_down.schemas import AdviceItem, DoomMeter, Finding
+
+    text = INSTRUCTIONS.replace("\n", " ")
+    budgets = dict(re.findall(r"([\w.]+(?: [a-z]+)?) (\d+)[,.;]", text.split("Hard length budgets")[1].split("Fill doomers")[0]))
+    limit = lambda model, name: next(m.max_length for m in model.model_fields[name].metadata if hasattr(m, "max_length"))  # noqa: E731
+    top = CalmDownDossier
+    assert int(budgets["headline"]) <= limit(top, "headline")
+    assert int(budgets["subtitle"]) <= limit(top, "subtitle")
+    assert int(budgets["opening"]) <= limit(top, "opening")
+    assert int(budgets["doom_meter.label"]) <= limit(DoomMeter, "label")
+    assert int(budgets["doom_meter.rationale"]) <= limit(DoomMeter, "rationale")
+    assert int(budgets["verdict"]) <= limit(top, "verdict")
+    assert int(budgets["each claim"]) <= limit(Finding, "claim")

@@ -38,6 +38,10 @@ Research rules (strict, mechanically verified after you answer):
 Writing rules: headline, subtitle, opening, analogies, doom meter, advice and verdict should be funny,
 specific and kind. They may not contain URLs, and they may not contain any numeric digits at all: put
 statistics only in claims and quotes. Never claim a profession is safe forever. The Doom Meter is openly subjective.
+Hard length budgets (characters, counted strictly; going over fails validation and the run): headline 60,
+subtitle 110, opening 700, doom_meter.label 45, doom_meter.rationale 230, each claim 300, each
+evidence_quote 400, each caveat 220, each analogy 220, each advice text 220, verdict 450, each
+uncertainty and limitation 200. Write short and count before answering.
 Fill doomers_get_right and reasons_to_chill with finding ids, and give practical, evidence-linked advice.
 """
 

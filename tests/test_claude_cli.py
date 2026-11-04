@@ -233,6 +233,11 @@ def test_unavailable_usage_is_explicit_not_zero(fake):
 @pytest.mark.parametrize("stdout,stderr,code,expected", [
     ("not json", "", 0, ("validation", "malformed_envelope")),
     ("[1, 2]", "", 0, ("validation", "malformed_envelope")),
+    ("{}", "", 0, ("validation", "malformed_envelope")),
+    (json.dumps({"result": '{"answer": "ok"}'}), "", 0, ("validation", "malformed_envelope")),
+    (json.dumps({"subtype": "success", "is_error": "false", "result": '{"answer": "ok"}'}), "", 0,
+     ("validation", "malformed_envelope")),
+    ("{}", "", 1, ("internal", "unrecognized_exit")),
     (envelope(result="not json"), "", 0, ("validation", "malformed_generated_json")),
     (envelope(result='{"wrong": 1}'), "", 0, ("validation", "schema_mismatch")),
     (json.dumps({"subtype": "success", "is_error": False, "result": 5}), "", 0, ("validation", "malformed_envelope")),

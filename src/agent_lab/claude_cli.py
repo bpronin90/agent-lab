@@ -299,7 +299,12 @@ def _parse_envelope(stdout: bytes) -> dict | None:
         data = json.loads(stdout)
     except ValueError:
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    # A CLI result envelope always reports both fields; anything else is malformed.
+    if not isinstance(data.get("is_error"), bool) or not isinstance(data.get("subtype"), str):
+        return None
+    return data
 
 
 def _strip_fence(text: str) -> str:

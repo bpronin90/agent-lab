@@ -16,11 +16,15 @@ retried, repaired or sent to another provider; any failure ends the run before t
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import hashlib
 import json
 import os
+import threading
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
@@ -33,7 +37,7 @@ from agent_lab import claude_cli
 from agent_lab.agents.calm_down import AGENT_NAME, PLAN_INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS
 from agent_lab.agents.calm_down.render import render_dossier_md, render_email_html, render_email_text
 from agent_lab.agents.calm_down.retrieval import (
-    FETCH_TIMEOUT_SECONDS, MAX_QUERY_LENGTH, MAX_READS, MAX_SEARCHES, ResearchSession, RetrievalMode, SourceRecord,
+    MAX_QUERY_LENGTH, MAX_READS, MAX_SEARCHES, ResearchSession, RetrievalMode, SourceRecord,
     read_source, research_session, search_sources,
 )
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
@@ -190,29 +194,50 @@ def _synthesis_prompt(fear: str, snapshots: list[str]) -> str:
             + "\n\nEVIDENCE (the only sources you may cite):\n\n" + "\n\n".join(snapshots) + "\n")
 
 
-def _require_time(ctx: claude_cli.ClaudeCliContext, needed: float = 0.0) -> None:
-    if ctx.remaining_seconds() <= needed:
+def _require_time(ctx: claude_cli.ClaudeCliContext) -> None:
+    if ctx.remaining_seconds() <= 0:
         raise claude_cli.ClaudeCliError("limit", "deadline_expired")
+
+
+def _within_deadline(ctx: claude_cli.ClaudeCliContext, op, *args):
+    """Run one retrieval operation, waiting no longer than the shared deadline allows.
+
+    Retrieval's own timeouts bound each network wait, not a slow stream, so the operation runs in a
+    daemon thread bound to the current retrieval session. If the deadline passes first, the run fails
+    and the abandoned operation is left to finish or die with the process; its result is never used.
+    """
+    _require_time(ctx)
+    outcome: dict = {}
+
+    def target() -> None:
+        try:
+            outcome["value"] = op(*args)
+        except BaseException as exc:  # handed back to the caller below
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=contextvars.copy_context().run, args=(target,), daemon=True)
+    worker.start()
+    worker.join(max(0.0, ctx.remaining_seconds()))
+    if worker.is_alive():
+        raise claude_cli.ClaudeCliError("limit", "deadline_expired")
+    _require_time(ctx)
+    if "error" in outcome:
+        if isinstance(outcome["error"], ModelRetry):
+            raise claude_cli.ClaudeCliError("tool", "retrieval_failed")
+        raise outcome["error"]
+    return outcome["value"]
 
 
 def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: ResearchSession,
               calls: list[ToolCallRecord]) -> list[str]:
-    """Run the plan's searches and bounded reads. Returns the exact snapshots shown to synthesis.
-
-    A live operation is only started when the remaining deadline covers its fetch timeout; one
-    already running is bounded by that timeout, so the deadline can be overrun by at most that much.
-    """
-    op_seconds = FETCH_TIMEOUT_SECONDS if session.mode == "live" else 0.0
+    """Run the plan's searches and bounded reads under the shared deadline.
+    Returns the exact snapshots shown to synthesis."""
     snapshots: list[str] = []
     chars = 0
     covered: set[str] = set()
     for item in plan.queries:
-        _require_time(ctx, op_seconds)
         calls.append(ToolCallRecord(tool_name="search_sources", args={"query": item.query}))
-        try:
-            listing = search_sources(item.query)
-        except ModelRetry:
-            raise claude_cli.ClaudeCliError("tool", "retrieval_failed") from None
+        listing = _within_deadline(ctx, search_sources, item.query)
         if listing == "No results.":
             continue
         taken = 0
@@ -225,12 +250,8 @@ def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: Resear
                 continue
             if not rec.text or chars + len(rec.text) > CLAUDE_MAX_EVIDENCE_CHARS:
                 continue
-            _require_time(ctx, op_seconds)
             calls.append(ToolCallRecord(tool_name="read_source", args={"source_id": rec.source_id}))
-            try:
-                snapshot = read_source(rec.source_id)
-            except ModelRetry:
-                raise claude_cli.ClaudeCliError("tool", "retrieval_failed") from None
+            snapshot = _within_deadline(ctx, read_source, rec.source_id)
             snapshots.append(snapshot)
             chars += len(rec.text)
             taken += 1
@@ -244,8 +265,17 @@ def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: Resear
 
 def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, session: ResearchSession) -> RunRecord:
     """Plan, retrieve, synthesize: exactly two CLI launches on success, one shared context."""
+    if not settings.claude_model:
+        # Refused before any launch, but still recorded like every other run.
+        now = datetime.now(timezone.utc)
+        return RunRecord(
+            run_id=str(uuid.uuid4()), agent_name=AGENT_NAME, provider=claude_cli.PROVIDER, model="unset",
+            prompt=build_prompt(fear)[:500], status="failed", started_at=now, finished_at=now,
+            error="model_required: set AGENT_LAB_CLAUDE_MODEL explicitly", error_class="config",
+            git_sha=settings.git_sha,
+            config_hash=hashlib.sha256(_claude_policy(settings, mode).encode()).hexdigest())
     ctx = claude_cli.ClaudeCliContext(
-        model=settings.claude_model or "", deadline=claude_cli._monotonic() + settings.deadline_seconds,
+        model=settings.claude_model, deadline=claude_cli._monotonic() + settings.deadline_seconds,
         max_requests=CLAUDE_LAUNCHES,
         max_output_tokens=max(settings.claude_plan_output_tokens, settings.claude_synthesis_output_tokens),
         binary=claude_binary,
@@ -267,8 +297,6 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
     """Research only. Produces a bundle for review, never an email."""
     if mode == "live" and settings.provider == "mock":
         raise ValueError("live retrieval with the mock provider would mix fixture content with live sources")
-    if settings.provider == claude_cli.PROVIDER and not settings.claude_model:
-        raise ValueError("AGENT_LAB_CLAUDE_MODEL must name the model explicitly for the claude-cli provider")
     out_dir.mkdir(parents=True, exist_ok=True)
     clear_generated(out_dir)
     with research_session(mode) as session:
@@ -276,11 +304,12 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
             record = run_claude_research(fear, settings, mode, session)
         else:
             record = run_agent(build_prompt(fear), settings, AGENT_NAME)
-    sources = session.sources
+    sources = dict(session.sources)  # one atomic copy: an abandoned retrieval thread may still add entries
+    searches = list(session.searches)
     files: dict[str, Path] = {}
     meta = {"run_id": record.run_id, "status": record.status, "provider": record.provider,
             "served_model": record.served_model, "git_sha": record.git_sha, "config_hash": record.config_hash[:16],
-            "requests": record.requests, "tool_calls": len(record.tool_calls), "searches": len(session.searches)}
+            "requests": record.requests, "tool_calls": len(record.tool_calls), "searches": len(searches)}
 
     dossier = None
     if record.status == "succeeded" and record.output is not None:
@@ -313,7 +342,7 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
         files["limitation"] = _limitation(out_dir, report)
     files["provenance"] = out_dir / "sources.json"
     files["provenance"].write_text(json.dumps(
-        {"mode": mode, "searches": session.searches, "sources": [s.provenance() for s in sources.values()]},
+        {"mode": mode, "searches": searches, "sources": [s.provenance() for s in sources.values()]},
         indent=2), "utf-8")
     return CalmDownResult(record=record, mode=mode, report=report, dossier=dossier, files=files)
 

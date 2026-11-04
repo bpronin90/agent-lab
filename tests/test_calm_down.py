@@ -712,6 +712,7 @@ import os  # noqa: E402
 import stat  # noqa: E402
 import sys  # noqa: E402
 import textwrap  # noqa: E402
+import threading  # noqa: E402
 
 from agent_lab import claude_cli  # noqa: E402
 from agent_lab.agents.calm_down import pipeline  # noqa: E402
@@ -725,7 +726,8 @@ SECRET = "sk-ant-should-never-leak"
 
 
 def claude_settings(**env):
-    return research_settings(Settings.from_env({**CLAUDE_ENV, **env}), env={})
+    env = {**CLAUDE_ENV, **env}
+    return research_settings(Settings.from_env(env), env=env)
 
 
 def envelope(result, usage=(50, 20)):
@@ -960,12 +962,35 @@ def test_claude_deadline_is_shared_not_reset_between_phases(tmp_path, fake_claud
     assert result.record.error_class == "limit" and len(launches()) == 1 and result.record.requests == 1
 
 
-def test_claude_requires_explicit_model(tmp_path, fake_claude):
+def test_claude_missing_model_is_recorded_and_clears_stale_email(tmp_path, fake_claude):
     launches = fake_claude()
-    with pytest.raises(ValueError, match="AGENT_LAB_CLAUDE_MODEL"):
-        run_calm_down(FEAR, research_settings(Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli"}), env={}),
-                      "fixture", tmp_path)
-    assert not launches()
+    (tmp_path / "email.html").write_text("stale")
+    result = run_calm_down(FEAR, research_settings(Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli"}), env={}),
+                           "fixture", tmp_path)
+    rec = result.record
+    assert rec.status == "failed" and rec.error_class == "config" and "model_required" in rec.error
+    assert rec.provider == "claude-cli" and rec.config_hash and rec.requests == 0
+    assert not launches() and not (tmp_path / "email.html").exists() and (tmp_path / "LIMITATION.md").exists()
+
+
+def test_claude_slow_retrieval_stream_cannot_outlive_the_deadline(tmp_path, fake_claude, monkeypatch):
+    """A search that keeps streaming past the shared deadline is abandoned and the run fails promptly."""
+    import time
+
+    launches = fake_claude()
+    release = threading.Event()
+
+    def dripping_search(query):
+        release.wait(30)  # stands in for a stream that trickles bytes for minutes
+        return "No results."
+
+    monkeypatch.setattr(pipeline, "search_sources", dripping_search)
+    started = time.monotonic()
+    result = run_calm_down(FEAR, claude_settings(AGENT_LAB_DEADLINE_SECONDS="2"), "fixture", tmp_path)
+    release.set()
+    assert time.monotonic() - started < 10
+    assert result.record.error_class == "limit" and "deadline_expired" in result.record.error
+    assert len(launches()) == 1 and result.dossier is None
 
 
 def test_claude_gate_refusal_launches_nothing(tmp_path, fake_claude, monkeypatch):

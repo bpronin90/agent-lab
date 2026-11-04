@@ -129,9 +129,9 @@ A successful run makes exactly **two** CLI launches that share one context (one 
    capped by retrieval's own limit). It cannot name URLs, tools or commands.
 2. **Retrieve (application).** The application runs each query through the existing `search_sources`
    and reads at most 2 results per query with `read_source` (at most 12 reads, 60,000 source
-   characters), inside the same retrieval session, allowlist and digests as the Gemini path. In live mode
-   an operation starts only if the remaining deadline covers its 15 s fetch timeout, so a run can overrun
-   its deadline by at most one fetch timeout. Any retrieval failure, an expired deadline, or reading
+   characters), inside the same retrieval session, allowlist and digests as the Gemini path. Each search or
+   read waits only as long as the shared deadline allows; a slower one (for example a trickling stream)
+   is abandoned in a background thread, its result is never used, and the run fails as `limit`. Any retrieval failure, an expired deadline, or reading
    nothing for one side stops the run before synthesis (`insufficient_evidence`): no reassurance from
    missing evidence.
 3. **Synthesize.** The model receives the fear and the exact source snapshots it may cite (each in

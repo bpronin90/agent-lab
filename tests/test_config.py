@@ -45,3 +45,14 @@ def test_fallback_model_listed_after_primary():
 
     s = Settings.from_env({"AGENT_LAB_PROVIDER": "gemini", "AGENT_LAB_GEMINI_FALLBACK_MODEL": "gemini-2.5-flash-lite"})
     assert model_names(s) == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+
+def test_claude_cli_settings_explicit_and_outside_general_hash():
+    base = Settings.from_env({})
+    s = Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli", "AGENT_LAB_CLAUDE_MODEL": " claude-x ",
+                           "AGENT_LAB_CLAUDE_PLAN_OUTPUT_TOKENS": "800"})
+    assert base.claude_model is None and s.claude_model == "claude-x" and s.claude_plan_output_tokens == 800
+    assert s.claude_synthesis_output_tokens == 4000
+    assert not any(k.startswith("claude_") for k in base.public_dict())
+    with pytest.raises(ValueError):
+        Settings.from_env({"AGENT_LAB_CLAUDE_SYNTHESIS_OUTPUT_TOKENS": "0"})

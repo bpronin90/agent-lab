@@ -7,28 +7,44 @@
    ``review-request.json`` for a person.
 2. ``finalize_calm_down``: offline. It loads that exact bundle, checks the source snapshot's
    digests, applies the human approvals, and renders the email. It never calls a model or the network.
+
+With ``AGENT_LAB_PROVIDER=claude-cli`` research instead runs two Claude CLI launches sharing one
+``ClaudeCliContext`` (one deadline, one accounting): a query plan, application-controlled retrieval
+through the same session tools, then dossier synthesis over the exact retrieved snapshots. Nothing is
+retried, repaired or sent to another provider; any failure ends the run before the next phase.
 """
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import hashlib
 import json
 import os
+import threading
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from pydantic import ValidationError
+from typing import Literal
 
-from agent_lab.agents.calm_down import AGENT_NAME
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic_ai import ModelRetry
+
+from agent_lab import claude_cli
+from agent_lab.agents.calm_down import AGENT_NAME, PLAN_INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS
 from agent_lab.agents.calm_down.render import render_dossier_md, render_email_html, render_email_text
-from agent_lab.agents.calm_down.retrieval import RetrievalMode, SourceRecord, research_session
+from agent_lab.agents.calm_down.retrieval import (
+    MAX_QUERY_LENGTH, MAX_READS, MAX_SEARCHES, ResearchSession, RetrievalMode, SourceRecord,
+    read_source, research_session, search_sources,
+)
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
 from agent_lab.agents.calm_down.verify import VerificationReport, review_request, verify_dossier
 from agent_lab.config import Settings
 from agent_lab.runtime import run_agent
-from agent_lab.schemas import RunRecord
+from agent_lab.schemas import RunRecord, ToolCallRecord
 
 BUNDLE_FORMAT = "calm-down-bundle/1"
 
@@ -46,6 +62,36 @@ RESEARCH_DEFAULTS = {
 RESEARCH_FILES = ("email.html", "email.txt", "research-dossier.md", "LIMITATION.md", "sources.json",
                   "review-request.json", "bundle.json")
 FINALIZE_FILES = ("email.html", "email.txt", "LIMITATION.md")
+
+
+# Claude CLI research bounds. The model only proposes queries; the application decides what to read.
+CLAUDE_MAX_QUERIES = 6
+CLAUDE_READS_PER_QUERY = 2
+CLAUDE_MAX_EVIDENCE_CHARS = 60_000
+CLAUDE_LAUNCHES = 2  # planning + synthesis; there is never a third
+assert CLAUDE_MAX_QUERIES <= MAX_SEARCHES and CLAUDE_MAX_QUERIES * CLAUDE_READS_PER_QUERY <= MAX_READS
+claude_binary = "claude"
+
+
+class PlannedQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    side: Literal["supports_fear", "challenges_fear"]
+    query: str = Field(min_length=3, max_length=MAX_QUERY_LENGTH)
+
+
+class QueryPlan(BaseModel):
+    """The planning phase's only output. Validated locally; it can name queries, nothing else."""
+
+    model_config = ConfigDict(extra="forbid")
+    queries: list[PlannedQuery] = Field(min_length=2, max_length=CLAUDE_MAX_QUERIES)
+
+    @model_validator(mode="after")
+    def _balanced(self) -> "QueryPlan":
+        if {q.side for q in self.queries} != {"supports_fear", "challenges_fear"}:
+            raise ValueError("the plan must cover both sides of the fear")
+        if len({q.query.strip().lower() for q in self.queries}) != len(self.queries):
+            raise ValueError("queries must be distinct")
+        return self
 
 
 def research_settings(settings: Settings, env: dict[str, str] | None = None) -> Settings:
@@ -125,6 +171,128 @@ def _write_reports(out_dir: Path, dossier: CalmDownDossier, report: Verification
         files["limitation"] = _limitation(out_dir, report)
 
 
+def _claude_policy(settings: Settings, mode: RetrievalMode) -> str:
+    """Everything that shapes a Claude CLI run besides the context bounds, for its config_hash."""
+    return json.dumps({
+        "plan_instructions": PLAN_INSTRUCTIONS, "synthesis_instructions": SYNTHESIS_INSTRUCTIONS,
+        "plan_output_tokens": settings.claude_plan_output_tokens,
+        "synthesis_output_tokens": settings.claude_synthesis_output_tokens,
+        "launches": CLAUDE_LAUNCHES, "max_queries": CLAUDE_MAX_QUERIES, "reads_per_query": CLAUDE_READS_PER_QUERY,
+        "max_evidence_chars": CLAUDE_MAX_EVIDENCE_CHARS, "deadline_seconds": settings.deadline_seconds,
+        "retrieval": mode,
+    }, sort_keys=True)
+
+
+def _plan_prompt(fear: str) -> str:
+    return (PLAN_INSTRUCTIONS + "\nReturn ONLY one JSON object, no prose, matching this JSON Schema:\n"
+            + json.dumps(QueryPlan.model_json_schema()) + "\n\nThe fear to investigate: " + fear.strip() + "\n")
+
+
+def _synthesis_prompt(fear: str, snapshots: list[str]) -> str:
+    return (SYNTHESIS_INSTRUCTIONS + "\nReturn ONLY one JSON object, no prose, matching this JSON Schema:\n"
+            + json.dumps(CalmDownDossier.model_json_schema()) + "\n\nThe fear to investigate: " + fear.strip()
+            + "\n\nEVIDENCE (the only sources you may cite):\n\n" + "\n\n".join(snapshots) + "\n")
+
+
+def _require_time(ctx: claude_cli.ClaudeCliContext) -> None:
+    if ctx.remaining_seconds() <= 0:
+        raise claude_cli.ClaudeCliError("limit", "deadline_expired")
+
+
+def _within_deadline(ctx: claude_cli.ClaudeCliContext, op, *args):
+    """Run one retrieval operation, waiting no longer than the shared deadline allows.
+
+    Retrieval's own timeouts bound each network wait, not a slow stream, so the operation runs in a
+    daemon thread bound to the current retrieval session. If the deadline passes first, the run fails
+    and the abandoned operation is left to finish or die with the process; its result is never used.
+    """
+    _require_time(ctx)
+    outcome: dict = {}
+
+    def target() -> None:
+        try:
+            outcome["value"] = op(*args)
+        except BaseException as exc:  # handed back to the caller below
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=contextvars.copy_context().run, args=(target,), daemon=True)
+    worker.start()
+    worker.join(max(0.0, ctx.remaining_seconds()))
+    if worker.is_alive():
+        raise claude_cli.ClaudeCliError("limit", "deadline_expired")
+    _require_time(ctx)
+    if "error" in outcome:
+        if isinstance(outcome["error"], ModelRetry):
+            raise claude_cli.ClaudeCliError("tool", "retrieval_failed")
+        raise outcome["error"]
+    return outcome["value"]
+
+
+def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: ResearchSession,
+              calls: list[ToolCallRecord]) -> list[str]:
+    """Run the plan's searches and bounded reads under the shared deadline.
+    Returns the exact snapshots shown to synthesis."""
+    snapshots: list[str] = []
+    chars = 0
+    covered: set[str] = set()
+    for item in plan.queries:
+        calls.append(ToolCallRecord(tool_name="search_sources", args={"query": item.query}))
+        listing = _within_deadline(ctx, search_sources, item.query)
+        if listing == "No results.":
+            continue
+        taken = 0
+        for entry in json.loads(listing):
+            rec = session.sources[entry["source_id"]]
+            if taken >= CLAUDE_READS_PER_QUERY:
+                break
+            if rec.read:
+                covered.add(item.side)  # already in the evidence from an earlier query
+                continue
+            if not rec.text or chars + len(rec.text) > CLAUDE_MAX_EVIDENCE_CHARS:
+                continue
+            calls.append(ToolCallRecord(tool_name="read_source", args={"source_id": rec.source_id}))
+            snapshot = _within_deadline(ctx, read_source, rec.source_id)
+            snapshots.append(snapshot)
+            chars += len(rec.text)
+            taken += 1
+            covered.add(item.side)
+    _require_time(ctx)
+    if covered != {"supports_fear", "challenges_fear"}:
+        # Synthesis never runs without evidence on both sides: no reassurance from nothing.
+        raise claude_cli.ClaudeCliError("validation", "insufficient_evidence")
+    return snapshots
+
+
+def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, session: ResearchSession) -> RunRecord:
+    """Plan, retrieve, synthesize: exactly two CLI launches on success, one shared context."""
+    if not settings.claude_model:
+        # Refused before any launch, but still recorded like every other run.
+        now = datetime.now(timezone.utc)
+        return RunRecord(
+            run_id=str(uuid.uuid4()), agent_name=AGENT_NAME, provider=claude_cli.PROVIDER, model="unset",
+            prompt=build_prompt(fear)[:500], status="failed", started_at=now, finished_at=now,
+            error="model_required: set AGENT_LAB_CLAUDE_MODEL explicitly", error_class="config",
+            git_sha=settings.git_sha,
+            config_hash=hashlib.sha256(_claude_policy(settings, mode).encode()).hexdigest())
+    ctx = claude_cli.ClaudeCliContext(
+        model=settings.claude_model, deadline=claude_cli._monotonic() + settings.deadline_seconds,
+        max_requests=CLAUDE_LAUNCHES,
+        max_output_tokens=max(settings.claude_plan_output_tokens, settings.claude_synthesis_output_tokens),
+        binary=claude_binary,
+    )
+    calls: list[ToolCallRecord] = []
+
+    def work(ctx: claude_cli.ClaudeCliContext) -> CalmDownDossier:
+        plan = ctx.call(_plan_prompt(fear), QueryPlan, settings.claude_plan_output_tokens)
+        snapshots = _retrieve(plan, ctx, session, calls)
+        return ctx.call(_synthesis_prompt(fear, snapshots), CalmDownDossier, settings.claude_synthesis_output_tokens)
+
+    record = claude_cli.run_with_record(
+        ctx, work, agent_name=AGENT_NAME, prompt_descriptor=build_prompt(fear),
+        instructions=_claude_policy(settings, mode), git_sha=settings.git_sha)
+    return record.model_copy(update={"tool_calls": calls, "tools_used": sorted({c.tool_name for c in calls})})
+
+
 def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: Path) -> CalmDownResult:
     """Research only. Produces a bundle for review, never an email."""
     if mode == "live" and settings.provider == "mock":
@@ -132,12 +300,16 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
     out_dir.mkdir(parents=True, exist_ok=True)
     clear_generated(out_dir)
     with research_session(mode) as session:
-        record = run_agent(build_prompt(fear), settings, AGENT_NAME)
-    sources = session.sources
+        if settings.provider == claude_cli.PROVIDER:
+            record = run_claude_research(fear, settings, mode, session)
+        else:
+            record = run_agent(build_prompt(fear), settings, AGENT_NAME)
+    sources = dict(session.sources)  # one atomic copy: an abandoned retrieval thread may still add entries
+    searches = list(session.searches)
     files: dict[str, Path] = {}
     meta = {"run_id": record.run_id, "status": record.status, "provider": record.provider,
             "served_model": record.served_model, "git_sha": record.git_sha, "config_hash": record.config_hash[:16],
-            "requests": record.requests, "tool_calls": len(record.tool_calls), "searches": len(session.searches)}
+            "requests": record.requests, "tool_calls": len(record.tool_calls), "searches": len(searches)}
 
     dossier = None
     if record.status == "succeeded" and record.output is not None:
@@ -170,7 +342,7 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
         files["limitation"] = _limitation(out_dir, report)
     files["provenance"] = out_dir / "sources.json"
     files["provenance"].write_text(json.dumps(
-        {"mode": mode, "searches": session.searches, "sources": [s.provenance() for s in sources.values()]},
+        {"mode": mode, "searches": searches, "sources": [s.provenance() for s in sources.values()]},
         indent=2), "utf-8")
     return CalmDownResult(record=record, mode=mode, report=report, dossier=dossier, files=files)
 

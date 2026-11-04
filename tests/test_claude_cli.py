@@ -332,14 +332,24 @@ def test_config_hash_covers_model_bounds_and_instructions(fake):
     assert claude_cli.config_hash(ctx(fake(), env={**GATE_ENV, "GEMINI_API_KEY": SECRET}), "i") == h
 
 
-# --- not a production entry point ----------------------------------------------------
+# --- provider selection ----------------------------------------------------
 
-def test_not_selectable_as_provider():
+def test_selectable_only_explicitly():
     from agent_lab.config import Settings
 
     assert Settings.from_env({}).provider == "mock"
-    with pytest.raises(ValueError, match="AGENT_LAB_PROVIDER"):
-        Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli"})
+    assert Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli"}).provider == "claude-cli"
+    from agent_lab.models import ProviderConfigError, build_model
+
+    with pytest.raises(ProviderConfigError):  # the general factory gains no Claude implementation
+        build_model(Settings.from_env({"AGENT_LAB_PROVIDER": "claude-cli"}))
+
+
+def test_per_call_allowance_narrows_never_widens(fake):
+    c = ctx(fake(), max_output_tokens=100)
+    with pytest.raises(ClaudeCliError, match="output_tokens_exceeded"):
+        c.call("p", Answer, max_output_tokens=5)  # envelope reports 7
+    assert ctx(fake(), max_output_tokens=100).call("p", Answer, max_output_tokens=10_000).answer == "ok"
 
 
 def test_descendant_holding_pipes_after_parent_exit_respects_deadline(fake):

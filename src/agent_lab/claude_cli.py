@@ -1,8 +1,8 @@
 """Internal, gated execution core for the Claude CLI (`claude -p`). Not a provider.
 
-Nothing selects this module: `AGENT_LAB_PROVIDER` does not accept it, mock stays the
-default, and Gemini is unchanged. It exists for a later, separately authorized Calm Down
-integration (#21). Every launch needs `AGENT_LAB_ALLOW_CLAUDE_CLI=1` and is refused when
+Only the Calm Down research pipeline uses it, when `AGENT_LAB_PROVIDER=claude-cli` is set
+explicitly (#21); the general model factory has no Claude implementation, mock stays the
+default, and Gemini is unchanged. Every launch needs `AGENT_LAB_ALLOW_CLAUDE_CLI=1` and is refused when
 `CI` or `KUBERNETES_SERVICE_HOST` is present. That catches accidental use in marked
 environments. It cannot detect cron, prove a human is present, or verify an owner
 authorization record. Unattended use stays prohibited by policy.
@@ -133,8 +133,12 @@ class ClaudeCliContext:
     def served_model(self) -> str | None:
         return next((c.served_model for c in reversed(self.calls) if c.served_model), None)
 
-    def call(self, prompt: str, schema: type[T]) -> T:
-        """Launch exactly one `claude -p` call and validate its JSON result against `schema`."""
+    def remaining_seconds(self) -> float:
+        return self.deadline - _monotonic()
+
+    def call(self, prompt: str, schema: type[T], max_output_tokens: int | None = None) -> T:
+        """Launch exactly one `claude -p` call and validate its JSON result against `schema`.
+        `max_output_tokens` narrows the per-response allowance for this call; it never widens it."""
         env = os.environ if self.env is None else self.env
         check_launch_gate(env)
         if self.requests >= self.max_requests:
@@ -143,10 +147,11 @@ class ClaudeCliContext:
         if remaining <= 0:
             raise ClaudeCliError("limit", "deadline_expired")
 
+        allowance = self.max_output_tokens if max_output_tokens is None else min(max_output_tokens, self.max_output_tokens)
         result = CallResult(model=self.model)
         try:
             stdout, stderr, returncode = self._launch(prompt, env, remaining, result)
-            return self._interpret(stdout, stderr, returncode, schema, result)
+            return self._interpret(stdout, stderr, returncode, schema, result, allowance)
         except ClaudeCliError as exc:
             result.error_class, result.code = exc.error_class, exc.code
             raise
@@ -172,7 +177,7 @@ class ClaudeCliContext:
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
-    def _interpret(self, stdout, stderr, returncode, schema, result):
+    def _interpret(self, stdout, stderr, returncode, schema, result, allowance):
         envelope = _parse_envelope(stdout)
         if envelope is not None:
             self._account(envelope, result)
@@ -190,7 +195,7 @@ class ClaudeCliContext:
             if returncode != 0:
                 raise ClaudeCliError("internal", "unrecognized_exit")
             raise ClaudeCliError("internal", "error_envelope")
-        if result.output_tokens is not None and result.output_tokens > self.max_output_tokens:
+        if result.output_tokens is not None and result.output_tokens > allowance:
             raise ClaudeCliError("limit", "output_tokens_exceeded")
         generated = envelope.get("result")
         if not isinstance(generated, str):

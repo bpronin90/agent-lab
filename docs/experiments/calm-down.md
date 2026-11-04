@@ -107,19 +107,66 @@ all carry a FIXTURE PREVIEW banner. The offline tests do not validate live resea
 Some fixture figures are older vintages: newer releases of the Stanford payroll study and the BLS outlook report different numbers, and the legal-hallucination figures are pinned to arXiv v1. A live edition has not been produced yet. It needs owner authorization (live Gemini runs spend free-tier quota),
 a `GEMINI_API_KEY`, and network egress to OpenAlex and the allowlisted hosts.
 
-## Claude CLI execution core (disabled)
+## Claude CLI research path (manual only)
 
-`src/agent_lab/claude_cli.py` is an internal core for running `claude -p` under the existing
-Claude subscription (#17). **Nothing uses it yet.** `AGENT_LAB_PROVIDER` does not accept it,
-mock stays the default, and Gemini is unchanged. Wiring it into Calm Down is a separate issue (#21).
+`AGENT_LAB_PROVIDER=claude-cli` makes `agent-lab calm-down` research through the existing Claude
+subscription (#21) instead of the tool-calling runtime. Only Calm Down research accepts it: the general
+model factory has no Claude implementation, so `agent-lab run` with this provider fails as a `config`
+error before any subprocess or network activity. Mock stays the default and Gemini is unchanged.
+
+```sh
+export AGENT_LAB_PROVIDER=claude-cli AGENT_LAB_CLAUDE_MODEL=<explicit model>   # no default model
+export AGENT_LAB_ALLOW_CLAUDE_CLI=1                                            # per-launch gate
+export AGENT_LAB_CALM_DOWN_RETRIEVAL=live      # or leave unset for the offline fixture corpus
+agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-claude
+```
+
+A successful run makes exactly **two** CLI launches that share one context (one deadline from
+`AGENT_LAB_DEADLINE_SECONDS`, one request allowance of 2, one usage tally):
+
+1. **Plan.** The model returns a `QueryPlan`: 2 to 6 search queries, each tagged `supports_fear` or
+   `challenges_fear`, with both sides present. It is validated locally (`extra="forbid"`, query length
+   capped by retrieval's own limit). It cannot name URLs, tools or commands.
+2. **Retrieve (application).** The application runs each query through the existing `search_sources`
+   and reads at most 2 results per query with `read_source` (at most 12 reads, 60,000 source
+   characters), inside the same retrieval session, allowlist and digests as the Gemini path. Each search or
+   read waits only as long as the shared deadline allows; a slower one (for example a trickling stream)
+   is abandoned in a background thread, its result is never used, and the run fails as `limit`. Any retrieval failure, an expired deadline, or reading
+   nothing for one side stops the run before synthesis (`insufficient_evidence`): no reassurance from
+   missing evidence.
+3. **Synthesize.** The model receives the fear and the exact source snapshots it may cite (each in
+   untrusted-text markers with its `source_id`) and returns a `CalmDownDossier`, validated locally and
+   then verified exactly as on the Gemini path. The saved bundle, human review, fixture-review rejection
+   for live bundles, and offline finalize are unchanged. Research never writes or sends an email.
+
+Invalid plans or output, service failures, exhausted bounds and deadline expiry end the run. There is
+no retry, repair call, third launch or fallback to another provider. One `RunRecord` is written on
+success or caught failure, with phase-one usage kept when phase two fails, unavailable usage marked as
+such, the retrieval calls as `tool_calls`, and a `config_hash` covering the model, bounds, launch policy,
+both phase instructions, phase allocations and retrieval bounds.
+
+**Phase allocations.** `AGENT_LAB_CLAUDE_PLAN_OUTPUT_TOKENS` (default 1,000) and
+`AGENT_LAB_CLAUDE_SYNTHESIS_OUTPUT_TOKENS` (default 4,000), about 5,000 output tokens per run. Each is
+checked against the CLI's *reported* usage after that response: an allocation expectation, not a
+service-side cap. Subscription capacity for a run is not proven. Every live use needs the per-launch
+authorization below, given separately for planning and synthesis.
+
+Offline tests (`tests/test_calm_down.py`) drive a fake `claude` executable through both phases with the
+fixture corpus and mocked retrieval failures. They validate the pipeline, not live evidence: no live
+Claude call or live retrieval has been run for this path.
+
+### Claude CLI execution core
+
+`src/agent_lab/claude_cli.py` is the internal core for running `claude -p` (#17). The Calm Down research
+path above is its only user.
 
 - **Launch gate.** Every launch requires `AGENT_LAB_ALLOW_CLAUDE_CLI=1` and is refused if `CI` or
   `KUBERNETES_SERVICE_HOST` is set, even to an empty value. A refused launch starts nothing and is a
   `config` failure. This catches accidental use in marked environments only. It cannot detect cron,
   prove a human is present, verify GitHub comments, or resist someone who controls the environment.
   Scheduled or unattended use stays prohibited by policy.
-- **Per-call authorization.** Each live invocation needs its own owner `AUTHORIZE_LIVE_CLAUDE` comment
-  on #17 plus the OWNER AUTHORIZATION RECORD in `CONTRIBUTING.md`. A launched call consumes that
+- **Per-call authorization.** Each live invocation needs its own owner authorization (planning and
+  synthesis separately, at the exact commit and model, naming the phase allocation) plus the OWNER AUTHORIZATION RECORD in `CONTRIBUTING.md`. A launched call consumes that
   authorization even if it fails. Use is existing-subscription only: no API billing, paid overage, or
   automatic paid fallback. The expected live use is one research run of about 5,000 output tokens.
 - **Subprocess boundary.** Argument array, no shell, prompt on stdin, a fresh empty temporary working

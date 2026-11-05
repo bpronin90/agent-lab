@@ -1307,3 +1307,76 @@ def test_unrelated_log_records_are_untouched(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     logging.getLogger("agent_lab.other").info("value %s", OA_KEY)
     assert OA_KEY in caplog.text  # only HTTP client loggers are rewritten
+
+
+# ---------------------------------------------------------------- denied-guarantee disclaimer (#30)
+
+_SAVED_VERDICT = ("Nobody can promise any profession is safe forever, so stay curious, keep verifying "
+                  "the robot’s homework, and keep learning.")
+
+
+def _guarantee_problems(report, field="verdict"):
+    return [p for p in report.problems if field in p.split(":")[0] and "guarantee" in p]
+
+
+@pytest.mark.parametrize("text", [
+    _SAVED_VERDICT,
+    "NOBODY   CAN\tPROMISE any   profession is safe\nforever",
+    "Work changes. Nobody can promise any profession is safe forever.",
+    "Stay curious; nobody can promise any profession is safe forever, so keep learning.",
+])
+def test_explicit_guarantee_disclaimer_is_not_a_guarantee(text):
+    assert not _guarantee_problems(verify_mutated(lambda d: d.update(verdict=text)))
+
+
+@pytest.mark.parametrize("text", [
+    "This profession is safe forever.",
+    "Lawyers will never be replaced.",
+    "Nobody can promise any profession is safe forever, but accountants are safe forever.",
+    "Nobody can promise any profession is safe forever. Accountants are safe forever.",
+    "Nobody can promise any profession is safe forever; accountants are safe forever.",
+    "Nobody can promise any profession is safe forever and accountants are safe forever.",
+    "Nobody can promise any profession is safe forever, and I guarantee yours is.",
+    "Do not worry; this profession is safe forever.",
+    "Do not worry. Nobody can promise any profession is safe forever, yet this one is safe forever.",
+    "It is false that nobody can promise any profession is safe forever.",
+    "Nobody can promise some profession is safe forever, yet lawyers are safe forever.",
+])
+def test_guarantee_beside_or_near_disclaimer_is_still_rejected(text):
+    assert _guarantee_problems(verify_mutated(lambda d: d.update(verdict=text)))
+
+
+@pytest.mark.parametrize("where", ["caveat", "uncertainties", "limitations"])
+def test_disclaimer_is_exempt_and_guarantee_rejected_in_every_field(where):
+    def put(d, text):
+        if where == "caveat":
+            finding(d, "F1")["caveat"] = text
+        elif where == "uncertainties":
+            d["uncertainties"][0] = text
+        else:
+            d["limitations"][0] = text
+
+    assert not _guarantee_problems(
+        verify_mutated(lambda d: put(d, _SAVED_VERDICT)), where)
+    bad = verify_mutated(lambda d: put(
+        d, "Nobody can promise any profession is safe forever and accountants are safe forever."))
+    assert _guarantee_problems(bad, where)
+
+
+def test_clearing_the_guarantee_false_positive_does_not_complete_a_bad_dossier():
+    def mutate(d):
+        d["verdict"] = _SAVED_VERDICT
+        finding(d, "F5")["caveat"] = "Forecasts say this could change by 2035 and 2040."
+        finding(d, "F8").update(claim="A generative AI assistant did not raise productivity for senior experts.")
+
+    report = verify_mutated(mutate)
+    assert not report.ok and report.status != "complete"
+    assert not _guarantee_problems(report)
+    assert any("2035" in p for p in report.problems)
+    assert any(r.item == "F8" for r in report.rejected)
+
+
+def test_changed_verdict_with_disclaimer_still_needs_fresh_human_approval():
+    report = verify_mutated(lambda d: d.update(verdict=_SAVED_VERDICT))
+    assert not _guarantee_problems(report)
+    assert report.status == "needs_review" and "editorial" in report.pending_review

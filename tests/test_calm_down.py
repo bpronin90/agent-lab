@@ -2288,3 +2288,51 @@ def test_claude_lopsided_labor_plan_still_reads_both_sides(tmp_path, fake_claude
     searched = [c.args["query"] for c in result.record.tool_calls if c.tool_name == "search_sources"]
     assert searched[1] == "measured labor outcomes after automation"  # sides alternate
     assert [c.tool_name for c in result.record.tool_calls].count("read_source") == 10
+
+
+def test_tool_path_bls_respects_runtime_deadline(monkeypatch):
+    import time
+    from agent_lab.models import remaining_seconds
+    seen = _bls_web(monkeypatch)
+    token = remaining_seconds.set(lambda: -1.0)
+    try:
+        with research_session("live", reference_date=TODAY):
+            with pytest.raises(RetrievalError, match="deadline"):
+                retrieval.bls_employment_releases("AI jobs")
+    finally:
+        remaining_seconds.reset(token)
+    assert seen == []  # expired: nothing sent
+
+    def trickle(request):
+        time.sleep(2.0)
+        return httpx.Response(200, html=_release(R1))
+
+    seen = _bls_web(monkeypatch, releases={_empsit(R1): trickle})
+    end = time.monotonic() + 0.5
+    token = remaining_seconds.set(lambda: end - time.monotonic())
+    try:
+        with research_session("live", reference_date=TODAY) as session:
+            started = time.monotonic()
+            with pytest.raises(RetrievalError, match="deadline"):
+                retrieval.bls_employment_releases("AI jobs")
+            assert time.monotonic() - started < 1.5  # did not wait for the slow stream
+            assert session.expired is not None
+    finally:
+        remaining_seconds.reset(token)
+    time.sleep(1.7)  # let the abandoned worker finish: the second release must not have started
+    assert _empsit(R2) not in seen
+
+
+def test_release_read_via_fetch_url_keeps_bls_provenance(monkeypatch):
+    seen = _bls_web(monkeypatch)
+    with research_session("live", reference_date=TODAY) as session:
+        generic = retrieval.fetch_url(_empsit(R1))
+        assert "Publication date" not in generic
+        snapshots = retrieval.bls_employment_releases("AI jobs")
+        bls = [s for s in session.sources.values() if s.publisher == retrieval.BLS_PUBLISHER]
+        assert [s.url for s in bls] == [_empsit(R1), _empsit(R2)]
+        for s in bls:
+            assert s.read and s.published and s.reference_period and s.year == int(s.published[:4])
+            assert s.text_sha256 == hashlib.sha256(s.text.encode()).hexdigest()
+            assert f"source_id={s.source_id}" in snapshots and f"Publication date: {s.published}" in snapshots
+    assert len(_bls_urls(seen)) == 4

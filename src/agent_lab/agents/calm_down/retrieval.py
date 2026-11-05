@@ -22,6 +22,7 @@ Fetched text is untrusted: it is returned inside markers and never executed or f
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import ipaddress
 import json
@@ -40,6 +41,8 @@ from urllib.parse import quote, quote_plus, urljoin, urlsplit
 
 import httpx
 from pydantic_ai import ModelRetry
+
+from agent_lab.models import remaining_seconds
 
 RetrievalMode = Literal["fixture", "live"]
 RETRIEVAL_ENV = "AGENT_LAB_CALM_DOWN_RETRIEVAL"
@@ -641,7 +644,8 @@ def read_bls_release(release: BlsRelease) -> str:
     match = _REFERENCE_PERIOD.search(text)
     period = (f"{match.group(1).capitalize()} {match.group(2)}"
               if match and match.group(1).lower() in _MONTHS else None)
-    source_id = "W" + hashlib.sha256(final_url.encode()).hexdigest()[:10]
+    # Own id namespace: a page read earlier through fetch_url never stands in for the dated release.
+    source_id = "BLS" + hashlib.sha256(final_url.encode()).hexdigest()[:10]
     rec = session.sources.get(source_id) or SourceRecord(
         source_id=source_id, title=title or "The Employment Situation", url=final_url, publisher=BLS_PUBLISHER,
         year=release.published.year, tier="primary", backend="fetch", text=text[:MAX_TEXT_CHARS],
@@ -654,12 +658,41 @@ def bls_employment_releases(query: str) -> str:
     """Read up to two recent official BLS Employment Situation releases (aggregate U.S. employment
     data) when the query is about jobs or the labor market. They measure outcomes; they do not show
     whether AI caused them. Call at most once. A fetch or safety failure ends the run."""
+    session = current_session()
+    remaining = remaining_seconds.get()  # the tool-agent runtime's shared deadline, when one is running
+    if remaining is not None and session.expired is None:
+        session.expired = lambda: remaining() <= 0
     try:
-        return _bls_employment_releases(query)
+        return _within_remaining(remaining, _bls_employment_releases, query)
     except ModelRetry as exc:
         # Terminal, as on the Claude path: safe_tool turns a non-ModelRetry into a tool error, so the
         # model is never asked to continue after a failed BLS fetch.
         raise RetrievalError(str(exc)) from None
+
+
+def _within_remaining(remaining: Callable[[], float] | None, op: Callable[[str], str], arg: str) -> str:
+    """Run op no longer than the shared deadline allows. A slower one (for example a trickling stream)
+    is abandoned in a daemon thread and its result is never used."""
+    if remaining is None:
+        return op(arg)
+    if remaining() <= 0:
+        raise RetrievalError("deadline expired before BLS retrieval")
+    outcome: dict = {}
+
+    def target() -> None:
+        try:
+            outcome["value"] = op(arg)
+        except BaseException as exc:  # handed back to the caller below
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=contextvars.copy_context().run, args=(target,), daemon=True)
+    worker.start()
+    worker.join(max(0.0, remaining()))
+    if worker.is_alive() or remaining() <= 0:
+        raise RetrievalError("deadline expired during BLS retrieval")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
 
 
 def _bls_employment_releases(query: str) -> str:

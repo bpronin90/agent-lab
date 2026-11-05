@@ -37,7 +37,11 @@ Research rules (strict, mechanically verified after you answer):
 
 Writing rules: headline, subtitle, opening, analogies, doom meter, advice and verdict should be funny,
 specific and kind. They may not contain URLs, and they may not contain any numeric digits at all: put
-statistics only in claims and quotes. Never claim a profession is safe forever. The Doom Meter is openly subjective.
+statistics only in claims and quotes. Never claim a profession is safe forever. A mechanical filter rejects
+these words anywhere in your own writing (everything except evidence_quote), even when negated: "guarantee",
+"guaranteed", "prove", "proves", "proven", "proof", "safe forever", "is safe", "are safe", "will never",
+"no chance". So do not write "not a guarantee" or "nobody is safe forever"; say "a likely outcome, not a
+certainty", "this suggests" or "nothing is certain" instead. The Doom Meter is openly subjective.
 Hard length budgets (characters, counted strictly; going over fails validation and the run): headline 60,
 subtitle 110, opening 700, doom_meter.label 45, doom_meter.rationale 230, each claim 300, each
 evidence_quote 400, each caveat 220, each analogy 220, each advice text 220, verdict 450, each

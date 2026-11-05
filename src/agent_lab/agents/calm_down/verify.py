@@ -46,7 +46,13 @@ _GUARANTEE = re.compile(
 # ("... and accountants are safe forever"), keeps the existing guarantee rejection. This is not
 # general semantic verification of disclaimers.
 _DENIED_GUARANTEE = re.compile(
-    r"(^\s*|[.!?;:]\s+)nobody\s+can\s+promise\s+any\s+profession\s+is\s+safe\s+forever\b", re.I)
+    r"(^\s*|[.!?;:]\s+)(?:nobody|no\s+one|no\s+job|no\s+profession|no\s+career)\s+"
+    r"(?:can\s+promise\s+(?:any\s+\w+\s+|you\s+)?(?:is|are)\s+|is\s+|are\s+)safe\s+forever\b", re.I)
+# Negated guarantee/proof wording ("not a guarantee", "no proof", "doesn't prove") is a disclaimer, not a claim.
+_NEGATED_GUARANTEE = re.compile(
+    r"\b(?:not|no|never|neither|nor|without|(?:is|are|was|were|does|do|did)n't|cannot|can't)\s+"
+    r"(?:(?:a|an|any|the|yet|been|be|itself|by\s+itself)\s+)*"
+    r"(?:guarantee[ds]?|proves?|proven|proof)\b", re.I)
 _NEGATION = re.compile(r"\b(no|not|none|never|nothing|neither|nor|cannot|fail(?:s|ed)?\s+to)\b|n't\b", re.I)
 _TRANSLATE = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"',
                             "–": "-", "—": "-", " ": " "})
@@ -150,7 +156,7 @@ def editorial_hash(dossier: CalmDownDossier) -> str:
 def _check_text(name: str, text: str, allowed_numbers: set[str], problems: list[str]) -> None:
     if _URL.search(text):
         problems.append(f"{name}: model-written text may not contain URLs or domains")
-    if _GUARANTEE.search(_DENIED_GUARANTEE.sub(r"\1[disclaimer]", text)):
+    if _GUARANTEE.search(_NEGATED_GUARANTEE.sub("[disclaimer]", _DENIED_GUARANTEE.sub(r"\1[disclaimer]", text))):
         problems.append(f"{name}: makes a guarantee or proof claim the evidence cannot support")
     invented = numbers(text) - allowed_numbers
     if invented:

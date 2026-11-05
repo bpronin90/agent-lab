@@ -6,6 +6,11 @@ Two backends share one `ResearchSession`:
   pipeline deterministically. It does NOT validate live research.
 * ``live`` (opt-in, ``AGENT_LAB_CALM_DOWN_RETRIEVAL=live``): OpenAlex search (free; an optional
   ``OPENALEX_API_KEY`` is sent only to api.openalex.org and redacted from every error) plus HTTPS fetches restricted to an allowlist of research, government and professional hosts.
+  Each live search is two planned OpenAlex requests: relevance, then the same query limited to works
+  published within a recent window (``AGENT_LAB_CALM_DOWN_RECENT_DAYS``), merged recent-first.
+
+Trust boundary: public query text leaves through ``safe_get``; returned metadata and abstracts are
+untrusted data.
 
 Every source the model reads is recorded with its URL, retrieval time, SHA-256 of the exact
 text the model saw, and the backend that produced it. Verification later checks quotes
@@ -26,10 +31,10 @@ import socket
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from importlib import resources
-from typing import Literal
+from typing import Callable, Literal, Mapping
 from urllib.parse import quote, quote_plus, urljoin, urlsplit
 
 import httpx
@@ -45,6 +50,11 @@ OPENALEX_KEY_ENV = "OPENALEX_API_KEY"
 MAX_SEARCHES = 8
 MAX_READS = 14
 MAX_RESULTS_PER_SEARCH = 5
+OPENALEX_PASSES = 2  # relevance + recent: initial requests per logical search (redirect hops excluded)
+MAX_OPENALEX_REQUESTS = MAX_SEARCHES * OPENALEX_PASSES
+RECENT_DAYS_ENV = "AGENT_LAB_CALM_DOWN_RECENT_DAYS"
+DEFAULT_RECENT_DAYS = 730
+MAX_RECENT_DAYS = 3650
 MAX_QUERY_LENGTH = 200
 MAX_TEXT_CHARS = 6000  # text shown to the model per source (and what quotes are checked against)
 MAX_FETCH_BYTES = 2_000_000
@@ -109,10 +119,24 @@ class ResearchSession:
     searches: list[str] = field(default_factory=list)
     reads: int = 0
     errors: list[str] = field(default_factory=list)
+    recent_days: int = DEFAULT_RECENT_DAYS
+    reference_date: date = field(default_factory=lambda: datetime.now(timezone.utc).date())
+    openalex_requests: int = 0
+    # Set by a caller with a deadline; a true result stops planned work between OpenAlex passes.
+    expired: Callable[[], bool] | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def read_sources(self) -> dict[str, SourceRecord]:
         return {k: v for k, v in self.sources.items() if v.read}
+
+    @property
+    def recent_from(self) -> date:
+        return self.reference_date - timedelta(days=self.recent_days)
+
+    def retrieval_policy(self) -> dict:
+        """The effective retrieval policy, fixed for the session (part of the Claude config_hash)."""
+        return {"mode": self.mode, "recent_days": self.recent_days, "recent_from": self.recent_from.isoformat(),
+                "openalex_passes": OPENALEX_PASSES, "max_results_per_search": MAX_RESULTS_PER_SEARCH}
 
 
 _session: ContextVar[ResearchSession | None] = ContextVar("calm_down_session", default=None)
@@ -121,10 +145,14 @@ _session: ContextVar[ResearchSession | None] = ContextVar("calm_down_session", d
 class research_session:
     """Bind a ResearchSession to the current context for the duration of one run."""
 
-    def __init__(self, mode: RetrievalMode = "fixture"):
+    def __init__(self, mode: RetrievalMode = "fixture", recent_days: int = DEFAULT_RECENT_DAYS,
+                 reference_date: date | None = None):
         if mode not in ("fixture", "live"):
             raise ValueError(f"retrieval mode must be fixture or live, got {mode!r}")
-        self.session = ResearchSession(mode=mode)
+        validate_recent_days(recent_days)
+        self.session = ResearchSession(mode=mode, recent_days=recent_days)
+        if reference_date is not None:
+            self.session.reference_date = reference_date
 
     def __enter__(self) -> ResearchSession:
         self._token = _session.set(self.session)
@@ -139,6 +167,22 @@ def mode_from_env(env: dict[str, str] | None = None) -> RetrievalMode:
     if raw not in ("fixture", "live"):
         raise ValueError(f"{RETRIEVAL_ENV} must be fixture or live, got {raw!r}")
     return raw  # type: ignore[return-value]
+
+
+def validate_recent_days(days: object) -> int:
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_RECENT_DAYS:
+        raise ValueError(f"{RECENT_DAYS_ENV} must be an integer from 1 to {MAX_RECENT_DAYS}, got {days!r}")
+    return days
+
+
+def recent_days_from_env(env: Mapping[str, str] | None = None) -> int:
+    """The recent-publication window in days (default 730), validated before any network activity."""
+    raw = (os.environ if env is None else env).get(RECENT_DAYS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_RECENT_DAYS
+    if not re.fullmatch(r"[0-9]{1,5}", raw):
+        raise ValueError(f"{RECENT_DAYS_ENV} must be an integer from 1 to {MAX_RECENT_DAYS}, got {raw!r}")
+    return validate_recent_days(int(raw))
 
 
 def current_session() -> ResearchSession:
@@ -336,9 +380,20 @@ def _abstract(inverted: dict[str, list[int]] | None) -> str:
     return " ".join(word for _, word in positions)
 
 
-def _openalex_search(session: ResearchSession, query: str) -> list[SourceRecord]:
-    url = (f"{OPENALEX_URL}?search={quote_plus(query)}&per-page={MAX_RESULTS_PER_SEARCH}"
-           "&filter=has_abstract:true&select=id,display_name,doi,publication_year,primary_location,abstract_inverted_index")
+def _openalex_url(query: str, recent_from: date | None) -> str:
+    flt = "has_abstract:true" + (f",from_publication_date:{recent_from.isoformat()}" if recent_from else "")
+    return (f"{OPENALEX_URL}?search={quote_plus(query)}&per-page={MAX_RESULTS_PER_SEARCH}"
+            f"&filter={flt}&select=id,display_name,doi,publication_year,primary_location,abstract_inverted_index")
+
+
+def _openalex_works(session: ResearchSession, url: str) -> list[dict]:
+    """One initial OpenAlex request (plus bounded redirect hops). Errors end the search; never retried."""
+    if session.expired is not None and session.expired():
+        raise RetrievalError("deadline expired before the next OpenAlex request")
+    with session._lock:
+        if session.openalex_requests >= MAX_OPENALEX_REQUESTS:
+            raise RetrievalError(f"OpenAlex request budget of {MAX_OPENALEX_REQUESTS} is used up")
+        session.openalex_requests += 1
     key = openalex_key()
     if not key:
         _, _, body = safe_get(url)
@@ -350,8 +405,63 @@ def _openalex_search(session: ResearchSession, query: str) -> list[SourceRecord]
             failure = redact(str(exc))
         if failure is not None:
             raise RetrievalError(failure)  # raised outside the handler: no chained unredacted exception
+    try:
+        works = json.loads(body)["results"]
+    except (ValueError, AttributeError, KeyError, TypeError):
+        works = None
+    if not isinstance(works, list) or not all(_valid_work(w) for w in works):
+        raise RetrievalError("malformed OpenAlex response")
+    return works[:MAX_RESULTS_PER_SEARCH]
+
+
+def _optional(value: object, kind: type) -> bool:
+    return value is None or (isinstance(value, kind) and not isinstance(value, bool))
+
+
+def _valid_work(work: object) -> bool:
+    """Every field the search consumes has the expected shape, checked before the result is accepted."""
+    if not isinstance(work, dict) or not isinstance(work.get("id"), str):
+        return False
+    location = work.get("primary_location")
+    source = location.get("source") if isinstance(location, dict) else None
+    inverted = work.get("abstract_inverted_index")
+    return (all(_optional(work.get(k), str) for k in ("display_name", "doi"))
+            and _optional(work.get("publication_year"), int)
+            and _optional(location, dict)
+            and (not isinstance(location, dict) or _optional(location.get("landing_page_url"), str))
+            and _optional(source, dict)
+            and (not isinstance(source, dict) or _optional(source.get("display_name"), str))
+            and _optional(inverted, dict)
+            and (not isinstance(inverted, dict) or all(
+                isinstance(word, str) and isinstance(poses, list)
+                and all(isinstance(p, int) and not isinstance(p, bool) for p in poses)
+                for word, poses in inverted.items())))
+
+
+def merge_candidates(recent: list[dict], relevance: list[dict]) -> list[dict]:
+    """Alternate recent and relevance works, recent first, skipping duplicate OpenAlex ids; when one
+    list runs out the other fills the remaining positions. At most MAX_RESULTS_PER_SEARCH."""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    queues = [list(recent), list(relevance)]
+    turn = 0
+    while len(merged) < MAX_RESULTS_PER_SEARCH and any(queues):
+        queue = queues[turn] if queues[turn] else queues[1 - turn]
+        while queue and queue[0]["id"] in seen:  # a duplicate never uses up a pass's turn
+            queue.pop(0)
+        if queue:
+            work = queue.pop(0)
+            seen.add(work["id"])
+            merged.append(work)
+        turn = 1 - turn
+    return merged
+
+
+def _openalex_search(session: ResearchSession, query: str) -> list[SourceRecord]:
+    relevance = _openalex_works(session, _openalex_url(query, None))
+    recent = _openalex_works(session, _openalex_url(query, session.recent_from))
     results = []
-    for work in json.loads(body).get("results", [])[:MAX_RESULTS_PER_SEARCH]:
+    for work in merge_candidates(recent, relevance):
         source_id = "OA" + work["id"].rsplit("/", 1)[-1]
         landing = work.get("doi") or (work.get("primary_location") or {}).get("landing_page_url") or work["id"]
         venue = ((work.get("primary_location") or {}).get("source") or {}).get("display_name") or "OpenAlex record"

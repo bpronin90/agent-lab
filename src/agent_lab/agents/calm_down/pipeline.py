@@ -39,7 +39,7 @@ from agent_lab.agents.calm_down import AGENT_NAME, PLAN_INSTRUCTIONS, SYNTHESIS_
 from agent_lab.agents.calm_down.render import render_dossier_md, render_email_html, render_email_text
 from agent_lab.agents.calm_down.retrieval import (
     MAX_QUERY_LENGTH, MAX_READS, MAX_SEARCHES, ResearchSession, RetrievalMode, SourceRecord,
-    read_source, research_session, search_sources,
+    read_source, recent_days_from_env, research_session, search_sources,
 )
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
 from agent_lab.agents.calm_down.verify import VerificationReport, review_request, verify_dossier
@@ -210,7 +210,7 @@ def mechanical_report(report: VerificationReport, mode: str, meta: dict, html: P
             "email_txt_sha256": hashlib.sha256(text.read_bytes()).hexdigest()}
 
 
-def _claude_policy(settings: Settings, mode: RetrievalMode) -> str:
+def _claude_policy(settings: Settings, session: ResearchSession) -> str:
     """Everything that shapes a Claude CLI run besides the context bounds, for its config_hash."""
     return json.dumps({
         "plan_instructions": PLAN_INSTRUCTIONS, "synthesis_instructions": SYNTHESIS_INSTRUCTIONS,
@@ -219,7 +219,7 @@ def _claude_policy(settings: Settings, mode: RetrievalMode) -> str:
         "synthesis_output_tokens": settings.claude_synthesis_output_tokens,
         "launches": CLAUDE_LAUNCHES, "max_queries": CLAUDE_MAX_QUERIES, "reads_per_query": CLAUDE_READS_PER_QUERY,
         "max_evidence_chars": CLAUDE_MAX_EVIDENCE_CHARS, "deadline_seconds": settings.deadline_seconds,
-        "retrieval": mode,
+        "retrieval": session.retrieval_policy(),
     }, sort_keys=True)
 
 
@@ -318,7 +318,7 @@ def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, sess
             run_id=str(uuid.uuid4()), agent_name=AGENT_NAME, provider=claude_cli.PROVIDER, model=refusal[0],
             prompt=build_prompt(fear)[:500], status="failed", started_at=now, finished_at=now,
             error=refusal[1], error_class="config", git_sha=settings.git_sha,
-            config_hash=hashlib.sha256(_claude_policy(settings, mode).encode()).hexdigest())
+            config_hash=hashlib.sha256(_claude_policy(settings, session).encode()).hexdigest())
     ctx = claude_cli.ClaudeCliContext(
         model=settings.claude_model, deadline=claude_cli._monotonic() + settings.deadline_seconds,
         max_requests=CLAUDE_LAUNCHES,
@@ -326,6 +326,8 @@ def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, sess
         binary=claude_binary, env=env, effort=settings.claude_effort,
     )
     calls: list[ToolCallRecord] = []
+    # A search abandoned at the deadline must not start its second planned OpenAlex request.
+    session.expired = lambda: ctx.remaining_seconds() <= 0
 
     def work(ctx: claude_cli.ClaudeCliContext) -> CalmDownDossier:
         plan = ctx.call(_plan_prompt(fear), QueryPlan, settings.claude_plan_output_tokens)
@@ -334,7 +336,7 @@ def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, sess
 
     record = claude_cli.run_with_record(
         ctx, work, agent_name=AGENT_NAME, prompt_descriptor=build_prompt(fear),
-        instructions=_claude_policy(settings, mode), git_sha=settings.git_sha)
+        instructions=_claude_policy(settings, session), git_sha=settings.git_sha)
     return record.model_copy(update={"tool_calls": calls, "tools_used": sorted({c.tool_name for c in calls})})
 
 
@@ -345,9 +347,11 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
     support gate is skipped and no approval or reviewer is ever recorded."""
     if mode == "live" and settings.provider == "mock":
         raise ValueError("live retrieval with the mock provider would mix fixture content with live sources")
+    # Resolved once per session, before any output or network activity; invalid values are refused.
+    recent_days = recent_days_from_env(env)
     out_dir.mkdir(parents=True, exist_ok=True)
     clear_generated(out_dir)
-    with research_session(mode) as session:
+    with research_session(mode, recent_days=recent_days) as session:
         if settings.provider == claude_cli.PROVIDER:
             record = run_claude_research(fear, settings, mode, session, env)
         else:

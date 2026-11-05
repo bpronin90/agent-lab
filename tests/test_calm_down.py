@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import re
+from datetime import date
 
 import httpx
 import pytest
@@ -1159,9 +1160,10 @@ def test_openalex_key_is_sent_as_api_key_param(monkeypatch, openalex):
     seen = openalex()
     with research_session("live"):
         assert "OAW1" in retrieval.search_sources("ai jobs")
-    assert len(seen) == 1
-    url = httpx.URL(seen[0])
-    assert url.host == "api.openalex.org" and url.params["api_key"] == OA_KEY
+    assert len(seen) == 2  # relevance pass + recent pass, both keyed
+    for raw in seen:
+        url = httpx.URL(raw)
+        assert url.host == "api.openalex.org" and url.params["api_key"] == OA_KEY
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])
@@ -1171,12 +1173,13 @@ def test_openalex_request_unchanged_without_key(monkeypatch, openalex, value):
     else:
         monkeypatch.setenv("OPENALEX_API_KEY", value)
     seen = openalex()
-    with research_session("live"):
+    with research_session("live", reference_date=date(2026, 11, 5)):
         retrieval.search_sources("ai jobs")
-    expected = (f"{retrieval.OPENALEX_URL}?search=ai+jobs&per-page={retrieval.MAX_RESULTS_PER_SEARCH}"
-                "&filter=has_abstract:true&select=id,display_name,doi,publication_year,primary_location,"
-                "abstract_inverted_index")
-    assert seen == [str(httpx.URL(expected))] and "api_key" not in seen[0]
+    base = (f"{retrieval.OPENALEX_URL}?search=ai+jobs&per-page={retrieval.MAX_RESULTS_PER_SEARCH}"
+            "&filter=has_abstract:true{}&select=id,display_name,doi,publication_year,primary_location,"
+            "abstract_inverted_index")
+    expected = [base.format(""), base.format(",from_publication_date:2024-11-05")]
+    assert seen == [str(httpx.URL(u)) for u in expected] and all("api_key" not in u for u in seen)
 
 
 def test_openalex_key_never_follows_redirect_to_another_host(monkeypatch, openalex):
@@ -1672,3 +1675,233 @@ def test_cli_unreviewed_flag_is_explicit_and_hyphen_safe(tmp_path, monkeypatch, 
     assert summary["unreviewed"] is True and summary["human_review"] == "absent" and summary["pending_review"] == []
     assert "--out; $(id) `x`" in json.loads((tmp_path / "b" / "bundle.json").read_text())["fear"]
     assert (tmp_path / "b" / "email.html").exists() and not (tmp_path / "--out; $(id) `x`").exists()
+
+
+# --------------------------------------------------------------------------- recent OpenAlex pass (#43)
+
+def _work(wid, year=2025):
+    return {"id": f"https://openalex.org/{wid}", "display_name": f"Paper {wid}", "doi": f"https://doi.org/10.1/{wid}",
+            "publication_year": year, "primary_location": {"source": {"display_name": "J"}},
+            "abstract_inverted_index": {"abstract": [0], wid: [1]}}
+
+
+def _two_pass(monkeypatch, recent, relevance, fail=None, fail_pass=None):
+    """Mock OpenAlex answering each pass separately. `fail` applies to the `fail_pass` request only."""
+    monkeypatch.setattr(retrieval.socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("93.184.216.34", 443))])
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        is_recent = "from_publication_date" in request.url.params.get("filter", "")
+        if fail and fail_pass == ("recent" if is_recent else "relevance"):
+            if fail == "http":
+                return httpx.Response(503, text="paused")
+            if fail == "timeout":
+                raise httpx.ReadTimeout("slow", request=request)
+            if fail == "redirect":
+                return httpx.Response(302, headers={"location": f"https://doi.org/x?{request.url.query.decode()}"})
+            return httpx.Response(200, content={"json": b"{not json", "shape": b'{"results": {"a": 1}}',
+                                                "noid": b'{"results": [{"display_name": "x"}]}',
+                                                "noresults": b"{}", "list": b"[]",
+                                                **{name: json.dumps({"results": [dict(_work("W1"), **bad)]}).encode()
+                                                   for name, bad in NESTED_MALFORMED.items()}}[fail])
+        return httpx.Response(200, json={"results": recent if is_recent else relevance})
+
+    monkeypatch.setattr(retrieval, "_client", lambda: _mock_client(handler))
+    return seen
+
+
+NESTED_MALFORMED = {
+    "location": {"primary_location": "invalid"},
+    "source": {"primary_location": {"source": ["x"]}},
+    "venue": {"primary_location": {"source": {"display_name": 7}}},
+    "landing": {"primary_location": {"landing_page_url": {"u": 1}}},
+    "year": {"publication_year": "2025"},
+    "title": {"display_name": ["t"]},
+    "doi": {"doi": 1},
+    "abstract": {"abstract_inverted_index": ["a"]},
+    "positions": {"abstract_inverted_index": {"a": "0"}},
+}
+
+
+def _openalex_urls(seen):
+    return [u for u in seen if httpx.URL(u).host == "api.openalex.org"]
+
+
+@pytest.mark.parametrize(("ref", "days", "start"), [(date(2026, 11, 5), 730, "2024-11-05"),
+                                                     (date(2026, 3, 1), 1, "2026-02-28"),
+                                                     (date(2026, 3, 1), 3650, "2016-03-03")])
+@pytest.mark.parametrize("key", [None, OA_KEY])
+def test_recent_pass_filter_is_exact_for_frozen_dates(monkeypatch, ref, days, start, key):
+    if key:
+        monkeypatch.setenv("OPENALEX_API_KEY", key)
+    else:
+        monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = _two_pass(monkeypatch, [], [])
+    with research_session("live", recent_days=days, reference_date=ref) as session:
+        assert retrieval.search_sources("ai jobs") == "No results."
+    assert session.retrieval_policy()["recent_from"] == start
+    assert [httpx.URL(u).params["filter"] for u in seen] == [
+        "has_abstract:true", f"has_abstract:true,from_publication_date:{start}"]
+    assert all(httpx.URL(u).params.get("api_key") == key for u in seen)
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "abc", "3651", "1.5", "99999", "7 days"])
+def test_invalid_recent_window_is_refused_before_network(tmp_path, fake_claude, monkeypatch, raw):
+    with pytest.raises(ValueError, match="AGENT_LAB_CALM_DOWN_RECENT_DAYS"):
+        retrieval.recent_days_from_env({"AGENT_LAB_CALM_DOWN_RECENT_DAYS": raw})
+    launches = fake_claude()
+    monkeypatch.setattr(retrieval, "safe_get", lambda *a, **k: pytest.fail("no request may be made"))
+    with pytest.raises(ValueError):
+        run_calm_down(FEAR, claude_settings(), "live", tmp_path, env={"AGENT_LAB_CALM_DOWN_RECENT_DAYS": raw})
+    assert not launches()
+
+
+def test_recent_window_configuration():
+    assert retrieval.recent_days_from_env({}) == 730
+    assert retrieval.recent_days_from_env({"AGENT_LAB_CALM_DOWN_RECENT_DAYS": " "}) == 730
+    assert retrieval.recent_days_from_env({"AGENT_LAB_CALM_DOWN_RECENT_DAYS": " 30 "}) == 30
+    for bad in (0, 3651, True, "30"):
+        with pytest.raises(ValueError):
+            research_session("live", recent_days=bad)
+
+
+def test_merge_alternates_recent_first_and_dedupes():
+    def ids(works):
+        return [w["id"].rsplit("/", 1)[-1] for w in works]
+    r = [_work(f"R{i}") for i in range(5)]
+    v = [_work(f"V{i}") for i in range(5)]
+    assert ids(retrieval.merge_candidates(r, v)) == ["R0", "V0", "R1", "V1", "R2"]
+    assert ids(retrieval.merge_candidates([], v)) == ["V0", "V1", "V2", "V3", "V4"]
+    assert ids(retrieval.merge_candidates(r[:1], v[:2])) == ["R0", "V0", "V1"]
+    assert ids(retrieval.merge_candidates(r[:2], [r[1], r[0], v[0]])) == ["R0", "R1", "V0"]
+    assert ids(retrieval.merge_candidates(r[:2], [r[0], v[1]])) == ["R0", "V1", "R1"]  # overlapping prefix
+    assert ids(retrieval.merge_candidates(r[:2], r[:2])) == ["R0", "R1"]  # duplicate-only
+    assert retrieval.merge_candidates([], []) == []
+
+
+def test_merged_search_is_stable_and_preserves_read_records(monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    _two_pass(monkeypatch, [_work("R0"), _work("V0")], [_work("V0"), _work("V1")])
+    with research_session("live") as session:
+        first = json.loads(retrieval.search_sources("ai jobs"))
+        retrieval.read_source("OAV0")
+        record, digest = session.sources["OAV0"], session.sources["OAV0"].text_sha256
+        second = json.loads(retrieval.search_sources("ai jobs again"))
+    assert [e["source_id"] for e in first] == [e["source_id"] for e in second] == ["OAR0", "OAV0", "OAV1"]
+    assert session.sources["OAV0"] is record and record.read and record.text_sha256 == digest
+    assert session.reads == 1 and session.openalex_requests == 4
+
+
+def test_claude_two_read_selection_includes_the_recent_pass(tmp_path, fake_claude, monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    fake_claude()
+    _two_pass(monkeypatch, [_work(f"R{i}", 2026) for i in range(5)], [_work(f"V{i}", 2010) for i in range(5)])
+    result = run_calm_down(FEAR, claude_settings(), "live", tmp_path)
+    reads = [c.args["source_id"] for c in result.record.tool_calls if c.tool_name == "read_source"]
+    assert reads[:2] == ["OAR0", "OAV0"]  # one from each pass survives truncation and the two-read limit
+
+
+@pytest.mark.parametrize("fail", ["http", "timeout", "json", "shape", "noid", "noresults", "list", "redirect",
+                                  *NESTED_MALFORMED])
+@pytest.mark.parametrize("fail_pass", ["relevance", "recent"])
+@pytest.mark.parametrize("key", [None, OA_KEY])
+def test_failed_pass_ends_the_search_without_retry(monkeypatch, fail, fail_pass, key):
+    if key:
+        monkeypatch.setenv("OPENALEX_API_KEY", key)
+    else:
+        monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = _two_pass(monkeypatch, [_work("R0")], [_work("V0")], fail, fail_pass)
+    with research_session("live") as session, pytest.raises(retrieval.ModelRetry):
+        retrieval.search_sources("ai jobs")
+    # No repeated, anonymous or third request; the failing pass is the last one sent.
+    assert len(_openalex_urls(seen)) == (1 if fail_pass == "relevance" else 2)
+    assert session.sources == {} and len(session.errors) == 1  # never silently an empty or partial result
+    assert all("test-openalex-key" not in e for e in session.errors)
+    if key and fail == "redirect":
+        assert "redirect away from api.openalex.org" in session.errors[0]
+        assert all(httpx.URL(u).host != "doi.org" for u in seen)
+
+
+def test_deadline_between_passes_stops_the_second_request(monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = _two_pass(monkeypatch, [_work("R0")], [_work("V0")])
+    with research_session("live") as session, pytest.raises(retrieval.ModelRetry, match="deadline"):
+        session.expired = lambda: len(seen) >= 1
+        retrieval.search_sources("ai jobs")
+    assert len(seen) == 1 and session.sources == {}
+
+
+def test_claude_second_pass_failure_stops_before_synthesis(tmp_path, fake_claude, monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    launches = fake_claude()
+    seen = _two_pass(monkeypatch, [_work("R0")], [_work("V0")], "http", "recent")
+    result = run_calm_down(FEAR, claude_settings(), "live", tmp_path)
+    assert result.record.error_class == "tool" and "retrieval_failed" in result.record.error
+    assert len(launches()) == 1 and len(seen) == 2 and len(result.record.tool_calls) == 1
+    assert not (tmp_path / "email.html").exists()
+
+
+def test_claude_deadline_after_first_pass_sends_no_second_request(tmp_path, fake_claude, monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    launches = fake_claude()
+    seen = _two_pass(monkeypatch, [_work("R0")], [_work("V0")])
+    real = retrieval.safe_get
+
+    def expiring(*a, **k):
+        out = real(*a, **k)
+        _clock(monkeypatch, [1e18])  # the shared deadline passes after the relevance request
+        return out
+
+    monkeypatch.setattr(retrieval, "safe_get", expiring)
+    result = run_calm_down(FEAR, claude_settings(), "live", tmp_path)
+    assert result.record.status == "failed" and len(seen) == 1 and len(launches()) == 1
+
+
+def test_search_budget_bounds_openalex_requests(monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = _two_pass(monkeypatch, [_work("R0")], [_work("V0")])
+    with research_session("live") as session:
+        for i in range(retrieval.MAX_SEARCHES):
+            retrieval.search_sources(f"query {i}")
+        with pytest.raises(retrieval.ModelRetry, match="search budget"):
+            retrieval.search_sources("one more")
+    assert len(seen) == session.openalex_requests == retrieval.MAX_OPENALEX_REQUESTS == 16
+
+
+def test_claude_config_hash_covers_retrieval_policy(tmp_path, fake_claude):
+    fake_claude()
+    a = run_calm_down(FEAR, claude_settings(), "fixture", tmp_path / "a").record.config_hash
+    b = run_calm_down(FEAR, claude_settings(), "fixture", tmp_path / "b",
+                      env={**os.environ, "AGENT_LAB_CALM_DOWN_RECENT_DAYS": "365"}).record.config_hash
+    c = run_calm_down(FEAR, claude_settings(), "fixture", tmp_path / "c").record.config_hash
+    assert a == c != b
+
+
+def test_tool_agent_failed_pass_is_one_run_without_retry(tmp_path, monkeypatch):
+    """Tool-calling path: a failed recent pass is reported to the model once as a tool error; the run is
+    not retried, no further OpenAlex request is made, and usage stays on one RunRecord."""
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = _two_pass(monkeypatch, [_work("R0")], [_work("V0")], "http", "recent")
+    calls = []
+
+    def model(messages, info):
+        calls.append(1)
+        if len(calls) == 1:
+            return ModelResponse(parts=[ToolCallPart("search_sources", {"query": "ai jobs"})])
+        return ModelResponse(parts=[TextPart(json.dumps(load_mock_dossier()))])
+
+    monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(model, model_name="fn"))
+    monkeypatch.setattr(runtime, "_sleep", lambda s: pytest.fail("no retry or pacing sleep expected"))
+    settings = dataclasses.replace(OFFLINE, provider="gemini", min_request_interval_seconds=0.0)
+    result = run_calm_down(FEAR, settings, "live", tmp_path)
+    assert len(seen) == 2 and len(calls) == 2 and result.record.requests == 2
+    assert any("503" in p for p in result.report.problems)
+
+
+def test_age_instructions_reach_every_model_path():
+    from agent_lab.agents.calm_down import INSTRUCTIONS, PLAN_INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS
+    for text in (INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS):
+        assert "7. Evidence age" in text and "Newer is not automatically stronger" in text
+        assert "without\n   writing a year or any other number" in text
+    assert "recently published work" in PLAN_INSTRUCTIONS and "do not add years" in PLAN_INSTRUCTIONS

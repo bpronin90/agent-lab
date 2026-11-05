@@ -736,7 +736,10 @@ def envelope(result, usage=(50, 20)):
             "result": result if isinstance(result, str) else json.dumps(result),
             "modelUsage": {"claude-sonnet-5-5": {}}}
     if usage:
-        data["usage"] = {"input_tokens": usage[0], "output_tokens": usage[1]}
+        data["usage"] = {"input_tokens": usage[0], "cache_creation_input_tokens": 0,
+                         "cache_read_input_tokens": 0, "output_tokens": usage[1]}
+        if len(usage) > 2:  # deliberately incomplete: drop the cache components
+            del data["usage"]["cache_creation_input_tokens"], data["usage"]["cache_read_input_tokens"]
     return json.dumps(data)
 
 
@@ -915,6 +918,13 @@ def test_claude_planning_failure_with_unavailable_usage(tmp_path, fake_claude):
     result = run_calm_down(FEAR, claude_settings(), "fixture", tmp_path)
     assert result.record.status == "failed" and len(launches()) == 1
     assert "usage_unavailable_for_some_calls" in result.record.error
+
+
+def test_claude_missing_cache_components_mark_usage_unavailable(tmp_path, fake_claude):
+    fake_claude(plan_usage=(50, 20, "no_cache"))
+    result = run_calm_down(FEAR, claude_settings(), "fixture", tmp_path)
+    assert "usage_unavailable_for_some_calls" in (result.record.error or "")
+    assert result.record.attempts[0].error and "usage_unavailable" in result.record.attempts[0].error
 
 
 def test_claude_phase_allocation_enforced_per_phase(tmp_path, fake_claude):

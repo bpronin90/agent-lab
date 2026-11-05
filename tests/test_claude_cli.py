@@ -24,10 +24,13 @@ class Answer(BaseModel):
     answer: str
 
 
-def envelope(result='{"answer": "ok"}', *, is_error=False, subtype="success", usage=True, model="claude-sonnet-5-5"):
+FULL_USAGE = {"input_tokens": 11, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 7}
+
+
+def envelope(result='{"answer": "ok"}', *, is_error=False, subtype="success", usage=True, model="claude-sonnet-5-5", usage_data=None):
     data = {"type": "result", "subtype": subtype, "is_error": is_error, "result": result}
     if usage:
-        data["usage"] = {"input_tokens": 11, "output_tokens": 7}
+        data["usage"] = usage_data if usage_data is not None else FULL_USAGE
     if model:
         data["modelUsage"] = {model: {"outputTokens": 7}}
     return json.dumps(data)
@@ -376,3 +379,76 @@ def test_descendant_without_pipes_is_reaped_on_success(fake, tmp_path):
     assert ctx(fake(body=body)).call("p", Answer) == Answer(answer="ok")
     time.sleep(2)
     assert not marker.exists()
+
+
+# --- cache-inclusive input accounting (#28) -------------------------------------------
+
+def test_input_sums_uncached_creation_and_read_across_two_calls(fake):
+    u = {"input_tokens": 4, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 5}
+    c = ctx(fake(stdout=envelope(usage_data=u)), max_requests=2)
+    c.call("a", Answer)
+    c.call("b", Answer)
+    assert (c.input_tokens, c.output_tokens) == (2208, 10) and c.usage_complete
+
+
+def test_explicit_cache_zeros_are_complete(fake):
+    c = ctx(fake(stdout=envelope()))
+    c.call("p", Answer)
+    assert c.input_tokens == 11 and c.usage_complete
+
+
+@pytest.mark.parametrize("bad", [None, -1, "5", True, 1.5, [3]])
+@pytest.mark.parametrize("field", ["cache_creation_input_tokens", "cache_read_input_tokens", "input_tokens"])
+def test_bad_component_keeps_known_total_and_marks_unavailable(fake, field, bad):
+    u = {"input_tokens": 4, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 5}
+    u[field] = bad
+    c = ctx(fake(stdout=envelope(usage_data=u)))
+    c.call("p", Answer)
+    assert c.input_tokens == 1104 - {"input_tokens": 4, "cache_creation_input_tokens": 100,
+                                     "cache_read_input_tokens": 1000}[field]
+    assert not c.usage_complete and not c.calls[0].usage_complete
+
+
+def test_missing_component_is_not_inferred_zero(fake):
+    u = {"input_tokens": 4, "output_tokens": 5}
+    c = ctx(fake(stdout=envelope(usage_data=u)))
+    c.call("p", Answer)
+    assert c.input_tokens == 4 and not c.usage_complete
+
+
+def test_all_input_unavailable_with_valid_output(fake):
+    c = ctx(fake(stdout=envelope(usage_data={"output_tokens": 5})))
+    c.call("p", Answer)
+    assert c.input_tokens == 0 and c.output_tokens == 5
+    assert c.calls[0].input_tokens is None and not c.calls[0].usage_complete and not c.usage_complete
+
+
+def test_model_usage_and_nested_cache_breakdown_not_double_counted(fake):
+    u = {**FULL_USAGE, "input_tokens": 4, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000,
+         "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 0}}
+    data = json.loads(envelope(usage_data=u))
+    data["modelUsage"] = {"claude-sonnet-5-5": {"inputTokens": 4, "cacheReadInputTokens": 1000,
+                                                "cacheCreationInputTokens": 100, "outputTokens": 7}}
+    c = ctx(fake(stdout=json.dumps(data)))
+    c.call("p", Answer)
+    assert c.input_tokens == 1104 and c.usage_complete
+
+
+@pytest.mark.parametrize("result,code", [("not json", "malformed_generated_json"), ('{"wrong": 1}', "schema_mismatch")])
+def test_generated_failures_keep_cache_inclusive_usage_without_retry(fake, result, code):
+    u = {"input_tokens": 4, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 5}
+    script = fake(stdout=envelope(result=result, usage_data=u))
+    c = ctx(script, max_requests=5)
+    with pytest.raises(ClaudeCliError) as err:
+        c.call("p", Answer)
+    assert err.value.code == code and len(calls(script)) == 1
+    assert (c.input_tokens, c.output_tokens, c.requests) == (1104, 5, 1)
+
+
+def test_error_envelope_keeps_cache_inclusive_usage_without_retry(fake):
+    u = {"input_tokens": 4, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 5}
+    script = fake(stdout=envelope(is_error=True, subtype="error_during_execution", result="boom", usage_data=u), code=1)
+    c = ctx(script, max_requests=5)
+    with pytest.raises(ClaudeCliError):
+        c.call("p", Answer)
+    assert len(calls(script)) == 1 and c.input_tokens == 1104

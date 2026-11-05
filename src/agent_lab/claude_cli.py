@@ -81,10 +81,15 @@ class CallResult:
 
     model: str
     served_model: str | None = None
-    input_tokens: int | None = None
+    input_tokens: int | None = None  # sum of the reported input components; lower bound unless input_complete
     output_tokens: int | None = None
+    input_complete: bool = False  # True only when all three input components were reported
     error_class: ErrorClass | None = None
     code: str | None = None
+
+    @property
+    def usage_complete(self) -> bool:
+        return self.input_complete and self.output_tokens is not None
 
 
 def check_launch_gate(env: Mapping[str, str]) -> None:
@@ -127,7 +132,7 @@ class ClaudeCliContext:
     @property
     def usage_complete(self) -> bool:
         """False when any launched call lacked reported usage; totals are then lower bounds."""
-        return all(c.input_tokens is not None and c.output_tokens is not None for c in self.calls)
+        return all(c.usage_complete for c in self.calls)
 
     @property
     def served_model(self) -> str | None:
@@ -210,9 +215,18 @@ class ClaudeCliContext:
             raise ClaudeCliError("validation", "schema_mismatch") from None
 
     def _account(self, envelope: dict, result: CallResult) -> None:
+        """Accumulate top-level `usage` only (never `modelUsage` or nested cache breakdowns,
+        which overlap it). Input tokens are the sum of uncached `input_tokens`,
+        `cache_creation_input_tokens` and `cache_read_input_tokens`, each counted once per call.
+        A component that is missing or not a nonnegative integer is unavailable, never assumed
+        zero: known components still count, so the totals are then lower bounds and the call is
+        marked incomplete (explicit zero is available usage)."""
         usage = envelope.get("usage")
         if isinstance(usage, dict):
-            result.input_tokens = _int_or_none(usage.get("input_tokens"))
+            parts = [_int_or_none(usage.get(k)) for k in _INPUT_COMPONENTS]
+            known = [p for p in parts if p is not None]
+            result.input_tokens = sum(known) if known else None
+            result.input_complete = len(known) == len(parts)
             result.output_tokens = _int_or_none(usage.get("output_tokens"))
         models = envelope.get("modelUsage")
         if isinstance(models, dict) and models:
@@ -321,6 +335,9 @@ def _strip_fence(text: str) -> str:
     return text.strip()
 
 
+_INPUT_COMPONENTS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+
+
 def _int_or_none(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
@@ -390,7 +407,7 @@ def run_with_record(
             AttemptRecord(
                 model=c.model,
                 error_class=c.error_class,
-                error=c.code if c.input_tokens is not None and c.output_tokens is not None
+                error=c.code if c.usage_complete
                 else "; ".join(filter(None, [c.code, "usage_unavailable"])),
             )
             for c in ctx.calls

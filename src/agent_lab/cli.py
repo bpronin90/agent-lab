@@ -83,7 +83,10 @@ def _calm_down(args) -> int:
         # explicitly (never exported to os.environ) so it cannot leak into later commands.
         env = resolve_research_env()
         settings = Settings.from_env(env)
-        mode = mode_from_env(env)
+        try:
+            mode = mode_from_env(env)
+        except ValueError:  # the library message echoes the value, which may come from .env.live
+            raise ValueError("AGENT_LAB_CALM_DOWN_RETRIEVAL must be fixture or live") from None
         result = run_calm_down(args.fear, research_settings(settings, env), mode, Path(args.out), env)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -1538,3 +1538,20 @@ def test_synthesis_20001_output_tokens_is_limit_with_partial_accounting(tmp_path
 def _env_with_synthesis_tokens(tokens):
     real = envelope
     return lambda result, usage=(50, 20): real(result, (900, tokens) if usage == (900, 300) else usage)
+
+
+@pytest.mark.parametrize("line", [
+    "AGENT_LAB_DEADLINE_SECONDS=private-token-example", "AGENT_LAB_MAX_REQUESTS=-private-token-example",
+    "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS=private-token-example", "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS=9999",
+    "AGENT_LAB_PROVIDER=private-token-example", "AGENT_LAB_CLAUDE_EFFORT=private-token-example",
+    "AGENT_LAB_CALM_DOWN_RETRIEVAL=private-token-example", "AGENT_LAB_MAX_REQUESTS=0"])
+def test_cli_invalid_file_values_never_echoed(tmp_path, monkeypatch, capsys, line):
+    f = tmp_path / ".env.live"
+    f.write_text(line + "\n")
+    monkeypatch.setattr(pipeline, "live_env_path", lambda: f)
+    for name in ("AGENT_LAB_PROVIDER", "AGENT_LAB_CALM_DOWN_RETRIEVAL"):
+        monkeypatch.delenv(name, raising=False)
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "o")]) == 2
+    err = capsys.readouterr().err
+    assert "config" in err or "error" in err
+    assert "private-token-example" not in err and "9999" not in err

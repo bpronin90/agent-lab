@@ -52,7 +52,7 @@ class Settings:
         env = dict(os.environ if env is None else env)
         provider = env.get("AGENT_LAB_PROVIDER", "mock").strip().lower()
         if provider not in PROVIDERS:
-            raise ValueError(f"AGENT_LAB_PROVIDER must be one of {PROVIDERS}, got {provider!r}")
+            raise ValueError(f"AGENT_LAB_PROVIDER must be one of {PROVIDERS}")
         return cls(
             provider=provider,
             gemini_model=env.get("AGENT_LAB_GEMINI_MODEL", cls.gemini_model),
@@ -152,9 +152,12 @@ def _positive_int(env: dict[str, str], key: str, default: int) -> int:
     raw = env.get(key)
     if raw is None or raw == "":
         return default
-    value = int(raw)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{key} must be an integer >= 1") from None
     if value < 1:
-        raise ValueError(f"{key} must be >= 1, got {value}")
+        raise ValueError(f"{key} must be >= 1")
     return value
 
 
@@ -162,7 +165,10 @@ def _non_negative_float(env: dict[str, str], key: str, default: float) -> float:
     raw = env.get(key)
     if raw is None or raw == "":
         return default
-    value = float(raw)
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{key} must be a number between 0 and 120") from None
     if not 0 <= value <= 120:
-        raise ValueError(f"{key} must be between 0 and 120, got {value}")
+        raise ValueError(f"{key} must be between 0 and 120")
     return value

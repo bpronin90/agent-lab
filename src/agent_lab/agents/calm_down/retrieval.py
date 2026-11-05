@@ -406,8 +406,8 @@ def _openalex_works(session: ResearchSession, url: str) -> list[dict]:
         if failure is not None:
             raise RetrievalError(failure)  # raised outside the handler: no chained unredacted exception
     try:
-        works = json.loads(body).get("results", [])
-    except (ValueError, AttributeError):
+        works = json.loads(body)["results"]
+    except (ValueError, AttributeError, KeyError, TypeError):
         works = None
     if not isinstance(works, list) or not all(isinstance(w, dict) and isinstance(w.get("id"), str) for w in works):
         raise RetrievalError("malformed OpenAlex response")
@@ -419,11 +419,17 @@ def merge_candidates(recent: list[dict], relevance: list[dict]) -> list[dict]:
     list runs out the other fills the remaining positions. At most MAX_RESULTS_PER_SEARCH."""
     merged: list[dict] = []
     seen: set[str] = set()
-    for i in range(max(len(recent), len(relevance))):
-        for work in recent[i:i + 1] + relevance[i:i + 1]:
-            if work["id"] not in seen and len(merged) < MAX_RESULTS_PER_SEARCH:
-                seen.add(work["id"])
-                merged.append(work)
+    queues = [list(recent), list(relevance)]
+    turn = 0
+    while len(merged) < MAX_RESULTS_PER_SEARCH and any(queues):
+        queue = queues[turn] if queues[turn] else queues[1 - turn]
+        while queue and queue[0]["id"] in seen:  # a duplicate never uses up a pass's turn
+            queue.pop(0)
+        if queue:
+            work = queue.pop(0)
+            seen.add(work["id"])
+            merged.append(work)
+        turn = 1 - turn
     return merged
 
 

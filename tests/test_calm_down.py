@@ -1701,7 +1701,8 @@ def _two_pass(monkeypatch, recent, relevance, fail=None, fail_pass=None):
             if fail == "redirect":
                 return httpx.Response(302, headers={"location": f"https://doi.org/x?{request.url.query.decode()}"})
             return httpx.Response(200, content={"json": b"{not json", "shape": b'{"results": {"a": 1}}',
-                                                "noid": b'{"results": [{"display_name": "x"}]}'}[fail])
+                                                "noid": b'{"results": [{"display_name": "x"}]}',
+                                                "noresults": b"{}", "list": b"[]"}[fail])
         return httpx.Response(200, json={"results": recent if is_recent else relevance})
 
     monkeypatch.setattr(retrieval, "_client", lambda: _mock_client(handler))
@@ -1759,6 +1760,7 @@ def test_merge_alternates_recent_first_and_dedupes():
     assert ids(retrieval.merge_candidates([], v)) == ["V0", "V1", "V2", "V3", "V4"]
     assert ids(retrieval.merge_candidates(r[:1], v[:2])) == ["R0", "V0", "V1"]
     assert ids(retrieval.merge_candidates(r[:2], [r[1], r[0], v[0]])) == ["R0", "R1", "V0"]
+    assert ids(retrieval.merge_candidates(r[:2], [r[0], v[1]])) == ["R0", "V1", "R1"]  # overlapping prefix
     assert ids(retrieval.merge_candidates(r[:2], r[:2])) == ["R0", "R1"]  # duplicate-only
     assert retrieval.merge_candidates([], []) == []
 
@@ -1785,7 +1787,7 @@ def test_claude_two_read_selection_includes_the_recent_pass(tmp_path, fake_claud
     assert reads[:2] == ["OAR0", "OAV0"]  # one from each pass survives truncation and the two-read limit
 
 
-@pytest.mark.parametrize("fail", ["http", "timeout", "json", "shape", "noid", "redirect"])
+@pytest.mark.parametrize("fail", ["http", "timeout", "json", "shape", "noid", "noresults", "list", "redirect"])
 @pytest.mark.parametrize("fail_pass", ["relevance", "recent"])
 @pytest.mark.parametrize("key", [None, OA_KEY])
 def test_failed_pass_ends_the_search_without_retry(monkeypatch, fail, fail_pass, key):

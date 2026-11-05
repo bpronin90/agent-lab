@@ -98,6 +98,22 @@ Exit codes: `0` edition rendered (finalize), `4` research insufficient, `5` wait
   The key is added as the `api_key` parameter to OpenAlex search requests only: never to
   `fetch_url` or another host, a keyed request that redirects away from `api.openalex.org` is refused,
   it is redacted from errors, and it is not passed to the Claude CLI or any model or saved output.
+- Each search makes two planned OpenAlex requests, one after the other: the relevance search
+  (`has_abstract:true`), then the same query limited to works published in a recent window
+  (`from_publication_date`). `AGENT_LAB_CALM_DOWN_RECENT_DAYS` sets the window in days: default 730,
+  an integer from 1 to 3650, read from the resolved research environment and refused before any
+  network activity if invalid. The window and its UTC reference date are fixed once per session and are
+  part of the Claude `config_hash`. Results are merged recent-first, alternating with relevance results,
+  deduplicated by OpenAlex id and capped at 5, so the Claude path's two reads per query see one from
+  each pass when both have distinct results. An empty recent pass leaves relevance results only; nothing
+  labels them recent. Either request failing ends that search through the normal error path (no retry,
+  no anonymous fallback, no third request); a passed deadline stops the second request. At most 16
+  initial OpenAlex requests per session (redirect hops are bounded separately). Search, read, model
+  and deadline limits are unchanged. The second pass is planned retrieval, never recovery from failure.
+- The instructions ask both model paths to prefer relevant recent evidence for current developments,
+  keep older foundational research where it is still the best evidence, not treat newer as stronger,
+  and say in words (no years) when evidence is mostly older or recent evidence was not found.
+  Offline tests check request construction and bounds, not live OpenAlex coverage or citation freshness.
 - `fetch_url` accepts only HTTPS, standard port, no embedded credentials, and an allowlist of research, government, court and professional hosts (`ALLOWED_HOSTS`). Every redirect hop is re-checked. Hosts that resolve to non-public IPs are refused.
 - Caps: 8 searches, 14 reads, 5 results per search, 2 MB per response, 15 s timeout, 6000 characters of text per source. PDFs are not parsed.
 - No cookies or auth headers are sent. Source text is wrapped in untrusted-data markers, and the instructions tell the model to ignore instructions inside it.

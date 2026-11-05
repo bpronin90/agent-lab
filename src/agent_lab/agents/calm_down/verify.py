@@ -41,6 +41,12 @@ _GUARANTEE = re.compile(
     r"safe forever|forever safe|are safe|is safe|impossible to replace|no chance|proves?|proven)\b",
     re.I,
 )
+# Deliberately narrow: only this exact denied proposition, at the start of the text or of a
+# sentence/clause (after . ! ? ; :), is exempt. Anything else, including text after it
+# ("... and accountants are safe forever"), keeps the existing guarantee rejection. This is not
+# general semantic verification of disclaimers.
+_DENIED_GUARANTEE = re.compile(
+    r"(^\s*|[.!?;:]\s+)nobody\s+can\s+promise\s+any\s+profession\s+is\s+safe\s+forever\b", re.I)
 _NEGATION = re.compile(r"\b(no|not|none|never|nothing|neither|nor|cannot|fail(?:s|ed)?\s+to)\b|n't\b", re.I)
 _TRANSLATE = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"',
                             "–": "-", "—": "-", " ": " "})
@@ -143,7 +149,7 @@ def editorial_hash(dossier: CalmDownDossier) -> str:
 def _check_text(name: str, text: str, allowed_numbers: set[str], problems: list[str]) -> None:
     if _URL.search(text):
         problems.append(f"{name}: model-written text may not contain URLs or domains")
-    if _GUARANTEE.search(text):
+    if _GUARANTEE.search(_DENIED_GUARANTEE.sub(r"\1[disclaimer]", text)):
         problems.append(f"{name}: makes a guarantee or proof claim the evidence cannot support")
     invented = numbers(text) - allowed_numbers
     if invented:

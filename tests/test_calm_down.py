@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 
 import httpx
@@ -1153,3 +1154,45 @@ def test_openalex_key_absent_from_outputs_record_and_claude(tmp_path, fake_claud
     blobs += [result.record.model_dump_json(), result.record.config_hash or "", json.dumps(launches())]
     for blob in blobs:
         assert "test-openalex-key" not in blob and "OPENALEX_API_KEY" not in blob
+
+
+def _full_chain(exc):
+    import traceback
+    seen, text = set(), []
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        text.append(repr(exc))
+        exc = exc.__cause__ or exc.__context__
+    return "\n".join(text)
+
+
+def test_fetch_failure_with_keyed_url_has_no_unredacted_exception_chain(monkeypatch):
+    import traceback
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    keyed = f"http://api.openalex.org/works?api_key={retrieval.quote_plus(OA_KEY)}"
+    with research_session("live") as session, pytest.raises(retrieval.ModelRetry) as info:
+        retrieval.fetch_url(keyed)
+    formatted = "".join(traceback.format_exception(info.value)) + _full_chain(info.value)
+    assert "test-openalex-key" not in formatted and session.errors
+    assert all("test-openalex-key" not in e for e in session.errors)
+
+
+@pytest.mark.parametrize("fail", [None, "connect", "http", "redirect"])
+def test_keyed_search_exception_chain_and_logs_are_redacted(monkeypatch, openalex, caplog, fail):
+    import traceback
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    seen = openalex(fail=fail)
+    caplog.set_level(logging.DEBUG)
+    with research_session("live"):
+        if fail is None:
+            retrieval.search_sources("ai jobs")
+        else:
+            with pytest.raises(retrieval.ModelRetry) as info:
+                retrieval.search_sources("ai jobs")
+            formatted = "".join(traceback.format_exception(info.value)) + _full_chain(info.value)
+            assert "test-openalex-key" not in formatted
+    assert seen and httpx.URL(seen[0]).params["api_key"] == OA_KEY
+    if fail != "connect":
+        assert any("HTTP Request" in r.getMessage() for r in caplog.records)  # httpx did log the URL
+    assert "test-openalex-key" not in caplog.text
+    assert all("test-openalex-key" not in r.getMessage() for r in caplog.records)

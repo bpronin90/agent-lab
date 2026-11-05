@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -276,6 +277,22 @@ def redact(text: str) -> str:
     return text
 
 
+class _RedactKeyFilter(logging.Filter):
+    """Redact the OpenAlex key from HTTP client log records (httpx logs full request URLs)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if openalex_key():
+            message = record.getMessage()
+            redacted = redact(message)
+            if redacted != message:
+                record.msg, record.args = redacted, None
+        return True
+
+
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).addFilter(_RedactKeyFilter())
+
+
 def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True, *,
              keyed: bool = False) -> tuple[str, httpx.Response, bytes]:
     """GET with allowlist checks on every hop and a hard byte cap.
@@ -322,10 +339,13 @@ def _openalex_search(session: ResearchSession, query: str) -> list[SourceRecord]
     if not key:
         _, _, body = safe_get(url)
     else:
+        failure = None
         try:
             _, _, body = safe_get(f"{url}&api_key={quote_plus(key)}", keyed=True)
         except (RetrievalError, httpx.HTTPError) as exc:
-            raise RetrievalError(redact(str(exc))) from None
+            failure = redact(str(exc))
+        if failure is not None:
+            raise RetrievalError(failure)  # raised outside the handler: no chained unredacted exception
     results = []
     for work in json.loads(body).get("results", [])[:MAX_RESULTS_PER_SEARCH]:
         source_id = "OA" + work["id"].rsplit("/", 1)[-1]
@@ -382,12 +402,17 @@ def search_sources(query: str) -> str:
         if len(session.searches) >= MAX_SEARCHES:
             raise ModelRetry(f"search budget of {MAX_SEARCHES} is used up; read what you have and answer")
         session.searches.append(query)
+    failure = None
     try:
         results = _fixture_search(session, query) if session.mode == "fixture" else _openalex_search(session, query)
     except (RetrievalError, httpx.HTTPError, ValueError) as exc:
         detail = redact(str(exc))
         session.errors.append(redact(f"search {query!r}: {detail}"))
-        raise ModelRetry(f"search failed: {detail}. Try another query or report the limitation.") from exc
+        failure = ModelRetry(f"search failed: {detail}. Try another query or report the limitation.")
+        if not openalex_key():
+            raise failure from exc
+    if failure is not None:
+        raise failure  # with a key set, never chain the unredacted original exception
     if not results:
         return "No results."
     return json.dumps([r.listing() for r in results])
@@ -423,11 +448,16 @@ def fetch_url(url: str) -> str:
         if session.reads >= MAX_READS:
             raise ModelRetry(f"read budget of {MAX_READS} is used up; answer with what you have")
         session.reads += 1
+    failure = None
     try:
         rec = _fetch_page(session, url)
     except (RetrievalError, httpx.HTTPError, UnicodeError) as exc:
         session.errors.append(redact(f"fetch {url!r}: {exc}"))
-        raise ModelRetry(redact(f"fetch refused or failed: {exc}")) from exc
+        failure = ModelRetry(redact(f"fetch refused or failed: {exc}"))
+        if not openalex_key():
+            raise failure from exc
+    if failure is not None:
+        raise failure  # with a key set, never chain the unredacted original exception
     return _mark_read(rec)
 
 

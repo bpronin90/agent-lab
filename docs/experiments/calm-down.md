@@ -119,6 +119,38 @@ Exit codes: `0` edition rendered (finalize), `4` research insufficient, `5` wait
 - No cookies or auth headers are sent. Source text is wrapped in untrusted-data markers, and the instructions tell the model to ignore instructions inside it.
 - Provenance (`sources.json`) records URL, backend, retrieval time and the SHA-256 of the exact text the model saw.
 
+### BLS primary releases (#44)
+
+Labor-market fears also get recent official employment data from public BLS Employment Situation
+releases, through the same `safe_get` path. No paid API, new provider, dependency or host is added.
+
+- **Trust boundary.** Application-owned discovery seed (`BLS_CATALOG`: the Employment Situation
+  archive index on `www.bls.gov`) → untrusted index links and release content → the catalog link
+  pattern (`news.release/archives/empsit_MMDDYYYY.htm`) plus `check_url`/`safe_get` on every hop, with
+  redirects pinned to `www.bls.gov` → recorded source snapshots → synthesis and mechanical verification.
+  Models never supply BLS URLs, and nothing in fetched text or links can cause another fetch.
+- **Relevance rule.** Deterministic: a query (or, on the Claude path, the fear or any planned query)
+  contains a labor-market word from `LABOR_TERMS` (job(s), employment, labor, workers, hiring, layoffs,
+  wages, occupations, careers and similar). Other fears never contact BLS.
+- **Bounds.** One index fetch and at most two release fetches per run, newest first. Each attempt,
+  including discovery and failures, is counted against the 14-read session cap before any request.
+  On the Claude path the releases take two of the twelve planned reads (academic reads drop to ten, still
+  at most two per query) and two texts' worth of the 60,000-character evidence cap. They are read only
+  after both sides have academic coverage and never count toward either side. A failure or an expired
+  deadline ends the run before synthesis, with no retry or fallback.
+- **Dates.** The publication date comes from the publisher's dated archive file name only; links
+  without a valid date, older than the recent window, or in the future are dropped. The statistical
+  reference period is taken from the release heading when present. Each snapshot header states the
+  publication date, the reference period and the retrieval time separately. If no recent release is
+  found, the run says so as a retrieval limitation and invents nothing. The index page is never a source.
+- **Evidence.** Releases are `backend="fetch"` sources with publisher, publication year, `published`,
+  `reference_period`, URL, retrieval time and text digest. Bundle reload, digest checks and offline
+  finalize are unchanged. Both model paths are told (rule 8) that releases measure aggregate outcomes,
+  not AI causation, displacement, forecasts or exposure, and that a release never counts for both sides.
+  The tool-calling agent reaches them with `bls_employment_releases` (one effective call per run).
+- Offline tests use synthetic BLS HTML. They do not establish compatibility with live BLS markup or that
+  any release supports a claim.
+
 ## Fixture preview vs live research
 
 `examples/calm-down/` holds the **fixture preview**. Its source excerpts were written by hand from memory
@@ -181,7 +213,7 @@ A successful run makes exactly **two** CLI launches that share one context (one 
    capped by retrieval's own limit). It cannot name URLs, tools or commands.
 2. **Retrieve (application).** The application runs each query through the existing `search_sources`
    and reads at most 2 results per query with `read_source` (at most 12 reads, 60,000 source
-   characters), inside the same retrieval session, allowlist and digests as the Gemini path. Each search or
+   characters; for labor-market fears two of those reads go to BLS releases, see above), inside the same retrieval session, allowlist and digests as the Gemini path. Each search or
    read waits only as long as the shared deadline allows; a slower one (for example a trickling stream)
    is abandoned in a background thread, its result is never used, and the run fails as `limit`. Any retrieval failure, an expired deadline, or reading
    nothing for one side stops the run before synthesis (`insufficient_evidence`): no reassurance from

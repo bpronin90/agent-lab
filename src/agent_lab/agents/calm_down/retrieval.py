@@ -10,7 +10,8 @@ Two backends share one `ResearchSession`:
   published within a recent window (``AGENT_LAB_CALM_DOWN_RECENT_DAYS``), merged recent-first.
 
 Trust boundary: public query text leaves through ``safe_get``; returned metadata and abstracts are
-untrusted data.
+untrusted data. For labor-market queries, live mode also reads up to two recent BLS Employment
+Situation releases discovered from one application-owned index page (see the BLS section).
 
 Every source the model reads is recorded with its URL, retrieval time, SHA-256 of the exact
 text the model saw, and the backend that produced it. Verification later checks quotes
@@ -103,6 +104,8 @@ class SourceRecord:
     retrieved_at: str | None = None
     text_sha256: str | None = None
     fixture_note: str | None = None
+    published: str | None = None  # publisher's release date (ISO); never inferred from retrieval time
+    reference_period: str | None = None  # statistical reference period stated in the release, if found
 
     def listing(self) -> dict:
         return {"source_id": self.source_id, "title": self.title, "publisher": self.publisher,
@@ -122,6 +125,10 @@ class ResearchSession:
     recent_days: int = DEFAULT_RECENT_DAYS
     reference_date: date = field(default_factory=lambda: datetime.now(timezone.utc).date())
     openalex_requests: int = 0
+    bls_index_fetches: int = 0
+    bls_release_fetches: int = 0
+    bls_releases: list | None = None  # discovery result, fixed once per session
+    notes: list[str] = field(default_factory=list)  # disclosed limitations that are not failures
     # Set by a caller with a deadline; a true result stops planned work between OpenAlex passes.
     expired: Callable[[], bool] | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -136,7 +143,9 @@ class ResearchSession:
     def retrieval_policy(self) -> dict:
         """The effective retrieval policy, fixed for the session (part of the Claude config_hash)."""
         return {"mode": self.mode, "recent_days": self.recent_days, "recent_from": self.recent_from.isoformat(),
-                "openalex_passes": OPENALEX_PASSES, "max_results_per_search": MAX_RESULTS_PER_SEARCH}
+                "openalex_passes": OPENALEX_PASSES, "max_results_per_search": MAX_RESULTS_PER_SEARCH,
+                "bls_catalog": list(BLS_CATALOG), "bls_max_releases": BLS_MAX_RELEASES,
+                "labor_terms": sorted(LABOR_TERMS)}
 
 
 _session: ContextVar[ResearchSession | None] = ContextVar("calm_down_session", default=None)
@@ -342,11 +351,12 @@ logging.setLogRecordFactory(_redacting_record_factory)
 
 
 def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True, *,
-             keyed: bool = False) -> tuple[str, httpx.Response, bytes]:
+             keyed: bool = False, pin_host: str | None = None) -> tuple[str, httpx.Response, bytes]:
     """GET with allowlist checks on every hop and a hard byte cap.
 
     ``keyed`` marks a URL carrying the OpenAlex key: a redirect that would leave
-    api.openalex.org is refused, so the key never reaches another host."""
+    api.openalex.org is refused, so the key never reaches another host. ``pin_host`` likewise
+    refuses any redirect that leaves that host, before the next hop is requested."""
     own = client is None
     client = client or _client()
     try:
@@ -358,6 +368,8 @@ def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True,
                     url = urljoin(url, location)
                     if keyed and (urlsplit(url).hostname or "").lower() != OPENALEX_HOST:
                         raise RetrievalError("redirect away from api.openalex.org refused for a keyed request")
+                    if pin_host and (urlsplit(url).hostname or "").lower() != pin_host:
+                        raise RetrievalError(f"redirect away from {pin_host} refused")
                     continue
                 if response.status_code != 200:
                     raise RetrievalError(f"HTTP {response.status_code} from {urlsplit(url).hostname}")
@@ -493,6 +505,164 @@ def _fetch_page(session: ResearchSession, url: str) -> SourceRecord:
     return rec
 
 
+# --------------------------------------------------------------------------- BLS primary releases (#44)
+#
+# Trust boundary: application-owned catalog seed -> untrusted index links and release content ->
+# the catalog link pattern plus check_url/safe_get on every hop -> recorded source snapshot ->
+# synthesis and mechanical verification. Nothing in fetched text can add a URL or another fetch.
+
+BLS_HOST = "www.bls.gov"
+BLS_PUBLISHER = "U.S. Bureau of Labor Statistics"
+# The archive index of Employment Situation releases. The only discovery seed; never model-chosen.
+BLS_CATALOG = ("https://www.bls.gov/bls/news-release/empsit.htm",)
+# Release links the index may name: the publisher's archive file, dated MMDDYYYY by its release date.
+BLS_RELEASE_LINK = re.compile(r"https://www\.bls\.gov/news\.release/archives/empsit_(\d{2})(\d{2})(\d{4})\.htm")
+BLS_INDEX_FETCHES = 1
+BLS_MAX_RELEASES = 2
+# Deterministic relevance rule: a query is labor-market when it contains one of these words.
+LABOR_TERMS = frozenset({
+    "job", "jobs", "employment", "unemployment", "unemployed", "employ", "employed", "employer", "employers",
+    "labor", "labour", "worker", "workers", "workforce", "hiring", "hire", "layoff", "layoffs", "payroll",
+    "payrolls", "wage", "wages", "occupation", "occupations", "career", "careers",
+})
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september",
+           "october", "november", "december")
+_REFERENCE_PERIOD = re.compile(r"THE EMPLOYMENT SITUATION\s*[-–—]+\s*([A-Za-z]+)\s+(\d{4})", re.IGNORECASE)
+
+
+def labor_market_query(text: str) -> bool:
+    return bool(set(re.findall(r"[a-z]+", text.lower())) & LABOR_TERMS)
+
+
+class _LinkExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                self.hrefs.append(href)
+
+
+@dataclass(frozen=True)
+class BlsRelease:
+    url: str
+    published: date
+
+
+def bls_release_links(index_url: str, html: str, session: ResearchSession) -> list[BlsRelease]:
+    """Dated release links from untrusted index HTML: catalog pattern only, deduplicated, inside the
+    recent window, newest first, at most BLS_MAX_RELEASES. Undated or stale links are dropped."""
+    parser = _LinkExtractor()
+    parser.feed(html)
+    found: dict[str, BlsRelease] = {}
+    for href in parser.hrefs:
+        url = urljoin(index_url, href.strip())
+        match = BLS_RELEASE_LINK.fullmatch(url)
+        if not match:
+            continue
+        month, day, year = (int(g) for g in match.groups())
+        try:
+            published = date(year, month, day)
+            check_url(url, resolve=False)
+        except (ValueError, RetrievalError):
+            continue
+        if session.recent_from <= published <= session.reference_date:
+            found[url] = BlsRelease(url, published)
+    return sorted(found.values(), key=lambda r: r.published, reverse=True)[:BLS_MAX_RELEASES]
+
+
+def _reserve_fetch(session: ResearchSession, counter: str, cap: int) -> None:
+    """Count an attempt against the session read allowance before any network activity."""
+    if session.expired is not None and session.expired():
+        raise RetrievalError("deadline expired before the next BLS request")
+    with session._lock:
+        if getattr(session, counter) >= cap:
+            raise RetrievalError(f"BLS {counter} cap of {cap} is used up")
+        if session.reads >= MAX_READS:
+            raise RetrievalError(f"read budget of {MAX_READS} is used up")
+        setattr(session, counter, getattr(session, counter) + 1)
+        session.reads += 1
+
+
+def discover_bls_releases() -> list[BlsRelease]:
+    """One index fetch per session. Returns the releases eligible for reading (possibly none)."""
+    session = current_session()
+    if session.mode == "fixture":
+        return []  # offline: no network, and the fixture corpus holds no BLS releases
+    if session.bls_releases is not None:
+        return session.bls_releases
+    failure = None
+    try:
+        _reserve_fetch(session, "bls_index_fetches", BLS_INDEX_FETCHES)
+        final_url, response, body = safe_get(BLS_CATALOG[0], pin_host=BLS_HOST)
+        if (urlsplit(final_url).hostname or "").lower() != BLS_HOST:
+            raise RetrievalError("BLS index redirected off www.bls.gov")
+        if "html" not in response.headers.get("content-type", ""):
+            raise RetrievalError("BLS index is not HTML")
+        releases = bls_release_links(final_url, body.decode(response.encoding or "utf-8", errors="replace"), session)
+    except (RetrievalError, httpx.HTTPError, UnicodeError) as exc:
+        session.errors.append(f"BLS discovery: {exc}")
+        failure = ModelRetry(f"BLS discovery failed: {exc}")
+    if failure is not None:
+        raise failure
+    session.bls_releases = releases
+    if not releases:
+        session.notes.append("no BLS Employment Situation release dated within the recent window was found")
+    return releases
+
+
+def read_bls_release(release: BlsRelease) -> str:
+    """Fetch one discovered release, register it as a fetch source, and return its snapshot."""
+    session = current_session()
+    if BLS_RELEASE_LINK.fullmatch(release.url) is None or release not in (session.bls_releases or []):
+        raise ModelRetry("only releases discovered from the BLS catalog can be read")
+    failure = None
+    try:
+        _reserve_fetch(session, "bls_release_fetches", BLS_MAX_RELEASES)
+        final_url, response, body = safe_get(release.url, pin_host=BLS_HOST)
+        if (urlsplit(final_url).hostname or "").lower() != BLS_HOST:
+            raise RetrievalError("BLS release redirected off www.bls.gov")
+        if "html" not in response.headers.get("content-type", ""):
+            raise RetrievalError(f"unsupported content type {response.headers.get('content-type', '')!r}")
+        title, text = html_to_text(body.decode(response.encoding or "utf-8", errors="replace"))
+        if not text:
+            raise RetrievalError("BLS release has no extractable text")
+    except (RetrievalError, httpx.HTTPError, UnicodeError) as exc:
+        session.errors.append(f"BLS release {release.url!r}: {exc}")
+        failure = ModelRetry(f"BLS release fetch failed: {exc}")
+    if failure is not None:
+        raise failure
+    match = _REFERENCE_PERIOD.search(text)
+    period = (f"{match.group(1).capitalize()} {match.group(2)}"
+              if match and match.group(1).lower() in _MONTHS else None)
+    source_id = "W" + hashlib.sha256(final_url.encode()).hexdigest()[:10]
+    rec = session.sources.get(source_id) or SourceRecord(
+        source_id=source_id, title=title or "The Employment Situation", url=final_url, publisher=BLS_PUBLISHER,
+        year=release.published.year, tier="primary", backend="fetch", text=text[:MAX_TEXT_CHARS],
+        published=release.published.isoformat(), reference_period=period)
+    session.sources[source_id] = rec
+    return _mark_read(rec)
+
+
+def bls_employment_releases(query: str) -> str:
+    """Read up to two recent official BLS Employment Situation releases (aggregate U.S. employment
+    data) when the query is about jobs or the labor market. They measure outcomes; they do not show
+    whether AI caused them. Call at most once."""
+    if not labor_market_query(query):
+        return "Not a labor-market query: no BLS release applies."
+    session = current_session()
+    if session.bls_release_fetches:
+        done = [s.source_id for s in session.sources.values() if s.published and s.read]
+        return f"BLS releases were already read this run: {', '.join(done) or 'none'}. Do not call again."
+    releases = discover_bls_releases()
+    if not releases:
+        return "No BLS Employment Situation release within the recent window is available. Say so; do not invent data."
+    return "\n\n".join(read_bls_release(r) for r in releases)
+
+
 # --------------------------------------------------------------------------- tools
 
 def _mark_read(rec: SourceRecord) -> str:
@@ -500,6 +670,10 @@ def _mark_read(rec: SourceRecord) -> str:
     rec.retrieved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rec.text_sha256 = hashlib.sha256(rec.text.encode()).hexdigest()
     header = f"source_id={rec.source_id} | {rec.title} | {rec.publisher} | {rec.year} | tier={rec.tier} | {rec.url}"
+    if rec.published:
+        header += (f"\nPublication date: {rec.published} | Statistical reference period: "
+                   f"{rec.reference_period or 'not identified in the extracted text'} | Retrieved: {rec.retrieved_at}"
+                   "\nNOTE: an official aggregate statistical release; it measures outcomes, not their causes")
     if rec.fixture_note:
         header += f"\nNOTE: {rec.fixture_note}"
     return f"{header}\n{UNTRUSTED_OPEN}\n{rec.text}\n{UNTRUSTED_CLOSE}"
@@ -575,4 +749,4 @@ def fetch_url(url: str) -> str:
     return _mark_read(rec)
 
 
-TOOLS = (search_sources, read_source, fetch_url)
+TOOLS = (search_sources, read_source, fetch_url, bls_employment_releases)

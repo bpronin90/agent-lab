@@ -1,0 +1,321 @@
+{
+  "name": "Agent Lab Calm Down email (manual, inactive, SSH transport)",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "calm-down-0"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fear",
+              "name": "fear",
+              "value": "REPLACE WITH THE FEAR TO RESEARCH",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Fear Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "id": "calm-down-1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fear = String($input.first().json.fear ?? '').trim();\nif (!fear || fear.length > 300 || /[\\u0000-\\u001f\\u007f]/.test(fear)) {\n  throw new Error('fear_invalid');\n}\n// base64 contains only [A-Za-z0-9+/=], so it is inert inside the shell command below\nreturn [{ json: { fear_b64: Buffer.from(fear, 'utf8').toString('base64') } }];"
+      },
+      "name": "Bound And Encode Fear",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "id": "calm-down-2"
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "operation": "execute",
+        "command": "=\"$AGENT_LAB_CALM_DOWN_PYTHON\" \"$AGENT_LAB_CALM_DOWN_RUNNER\" run --fear-b64 {{ $json.fear_b64 }}"
+      },
+      "name": "Run Research",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "notes": "Runs only the fixed host runner over the n8n SSH node (transport per owner direction on #36). Attach the owner's SSH credential in n8n after import; none is exported. The remote login environment must define the AGENT_LAB_CALM_DOWN_* variables. Unverified end to end.",
+      "id": "calm-down-3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "research-succeeded?",
+              "leftValue": "={{ $json.code }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Research Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "The SSH node does not fail on a non-zero exit code. A refusal from Run Research stops the workflow here (false branch is intentionally unconnected).",
+      "id": "calm-down-4"
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "operation": "execute",
+        "command": "=\"$AGENT_LAB_CALM_DOWN_PYTHON\" \"$AGENT_LAB_CALM_DOWN_RUNNER\" claim --execution-id {{ JSON.parse($('Run Research').first().json.stdout).execution_id }}"
+      },
+      "name": "Claim Delivery",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "notes": "Runs only the fixed host runner over the n8n SSH node (transport per owner direction on #36). Attach the owner's SSH credential in n8n after import; none is exported. The remote login environment must define the AGENT_LAB_CALM_DOWN_* variables. Unverified end to end.",
+      "id": "calm-down-5"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "claim-succeeded?",
+              "leftValue": "={{ $json.code }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Claim Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ],
+      "notes": "The SSH node does not fail on a non-zero exit code. A refusal from Claim Delivery stops the workflow here (false branch is intentionally unconnected).",
+      "id": "calm-down-6"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ JSON.parse($json.stdout).to }}",
+        "subject": "={{ JSON.parse($json.stdout).subject }}",
+        "emailType": "html",
+        "message": "={{ JSON.parse($json.stdout).html }}",
+        "options": {}
+      },
+      "name": "Send Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        0
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "onError": "continueErrorOutput",
+      "notes": "Attach the owner's Gmail credential in n8n after import. No credential is exported.",
+      "id": "calm-down-7"
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "operation": "execute",
+        "command": "=\"$AGENT_LAB_CALM_DOWN_PYTHON\" \"$AGENT_LAB_CALM_DOWN_RUNNER\" ack --outcome sent --execution-id {{ JSON.parse($('Claim Delivery').first().json.stdout).execution_id }}"
+      },
+      "name": "Ack Sent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        0
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "notes": "Runs only the fixed host runner over the n8n SSH node (transport per owner direction on #36). Attach the owner's SSH credential in n8n after import; none is exported. The remote login environment must define the AGENT_LAB_CALM_DOWN_* variables. Unverified end to end.",
+      "id": "calm-down-8"
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "operation": "execute",
+        "command": "=\"$AGENT_LAB_CALM_DOWN_PYTHON\" \"$AGENT_LAB_CALM_DOWN_RUNNER\" ack --outcome unknown --execution-id {{ JSON.parse($('Claim Delivery').first().json.stdout).execution_id }}"
+      },
+      "name": "Ack Unknown",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        0
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "notes": "Runs only the fixed host runner over the n8n SSH node (transport per owner direction on #36). Attach the owner's SSH credential in n8n after import; none is exported. The remote login environment must define the AGENT_LAB_CALM_DOWN_* variables. Unverified end to end.",
+      "id": "calm-down-9"
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fear Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fear Input": {
+      "main": [
+        [
+          {
+            "node": "Bound And Encode Fear",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound And Encode Fear": {
+      "main": [
+        [
+          {
+            "node": "Run Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Research": {
+      "main": [
+        [
+          {
+            "node": "Research Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Delivery": {
+      "main": [
+        [
+          {
+            "node": "Claim Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Gmail": {
+      "main": [
+        [
+          {
+            "node": "Ack Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ack Unknown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Claim Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Claim Succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

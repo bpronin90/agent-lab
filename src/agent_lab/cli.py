@@ -22,6 +22,9 @@ def main(argv: list[str] | None = None) -> int:
     calm.add_argument("fear")
     calm.add_argument("--out", default="calm-down-out", help="Directory for email.html, email.txt and the dossier.")
     calm.add_argument("--no-save", action="store_true", help="Do not append to the local run log.")
+    calm.add_argument("--unreviewed", action="store_true",
+                      help="Skip ONLY the human support review: render a bannered 'Unreviewed, AI-generated' "
+                           "edition after every mechanical check passes. No approval or reviewer is recorded.")
     final = sub.add_parser("calm-down-finalize",
                            help="Offline: apply human approvals to a saved Calm Down bundle and render the email.")
     final.add_argument("out", help="Directory holding bundle.json from `calm-down`.")
@@ -56,9 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     return exit_code(record)
 
 
-def _summary(result, mode) -> dict:
+def _summary(result, mode, unreviewed: bool = False) -> dict:
     report = result.report
-    return {"run_id": result.record.run_id if result.record else None,
+    extra = {"unreviewed": True, "human_review": "absent"} if unreviewed else {}
+    return {**extra, "run_id": result.record.run_id if result.record else None,
             "run_status": result.record.status if result.record else "finalized-offline", "retrieval": mode,
             "research_status": report.status if report else None,
             "problems": report.problems if report else [],
@@ -87,13 +91,13 @@ def _calm_down(args) -> int:
             mode = mode_from_env(env)
         except ValueError:  # the library message echoes the value, which may come from .env.live
             raise ValueError("AGENT_LAB_CALM_DOWN_RETRIEVAL must be fixture or live") from None
-        result = run_calm_down(args.fear, research_settings(settings, env), mode, Path(args.out), env)
+        result = run_calm_down(args.fear, research_settings(settings, env), mode, Path(args.out), env, args.unreviewed)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if not args.no_save:
         save_record(result.record, settings.run_log_dir)
-    print(json.dumps(_summary(result, mode), indent=2))
+    print(json.dumps(_summary(result, mode, args.unreviewed), indent=2))
     if result.record.status != "succeeded":
         return exit_code(result.record)
     return _research_exit(result)

@@ -97,6 +97,7 @@ class VerificationReport:
     cited_sources: list[str] = field(default_factory=list)
     distinct_works: int = 0
     reviewer: str | None = None
+    unreviewed: bool = False  # explicit opt-in: every mechanical check ran, human support review was skipped
 
     @property
     def ok(self) -> bool:
@@ -178,8 +179,12 @@ def review_request(dossier: CalmDownDossier, report: VerificationReport, read: d
     }
 
 
-def verify_dossier(dossier: CalmDownDossier, read: dict[str, SourceRecord], review: dict | None = None) -> VerificationReport:
-    report = VerificationReport(status="complete")
+def verify_dossier(dossier: CalmDownDossier, read: dict[str, SourceRecord], review: dict | None = None,
+                   unreviewed: bool = False) -> VerificationReport:
+    """``unreviewed=True`` skips ONLY the human support gate below; every mechanical check still applies.
+    It records no approvals and no reviewer, so a complete result means "mechanically accepted", never
+    "human approved"."""
+    report = VerificationReport(status="complete", unreviewed=unreviewed)
     for finding in dossier.findings:
         reason = check_finding(finding, read)
         if reason:
@@ -232,6 +237,9 @@ def verify_dossier(dossier: CalmDownDossier, read: dict[str, SourceRecord], revi
     if report.problems:
         report.status = "insufficient"
         return report
+
+    if unreviewed:
+        return report  # mechanically accepted; no approvals applied, reviewer stays None
 
     # Human support gate: fail closed until every displayed claim and the editorial copy are approved.
     approvals = set((review or {}).get("approvals", []))

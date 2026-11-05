@@ -61,8 +61,9 @@ RESEARCH_DEFAULTS = {
 
 # Research owns every generated file; finalize owns only the email outputs and LIMITATION.md.
 RESEARCH_FILES = ("email.html", "email.txt", "research-dossier.md", "LIMITATION.md", "sources.json",
-                  "review-request.json", "bundle.json")
-FINALIZE_FILES = ("email.html", "email.txt", "LIMITATION.md")
+                  "review-request.json", "bundle.json", "mechanical-report.json")
+FINALIZE_FILES = ("email.html", "email.txt", "LIMITATION.md", "mechanical-report.json")
+MECHANICAL_REPORT_FORMAT = "calm-down-mechanical-report/1"
 
 
 # Claude CLI research bounds. The model only proposes queries; the application decides what to read.
@@ -180,16 +181,33 @@ def _limitation(out_dir: Path, report: VerificationReport) -> Path:
 
 def _write_reports(out_dir: Path, dossier: CalmDownDossier, report: VerificationReport,
                    sources: dict[str, SourceRecord], mode: str, meta: dict, files: dict[str, Path]) -> None:
+    unreviewed = report.unreviewed
     files["dossier"] = out_dir / "research-dossier.md"
-    files["dossier"].write_text(render_dossier_md(dossier, report, sources, mode, meta), "utf-8")
+    files["dossier"].write_text(render_dossier_md(dossier, report, sources, mode, meta, unreviewed), "utf-8")
     if report.ok:
         fixture = mode == "fixture"
         files["html"] = out_dir / "email.html"
-        files["html"].write_text(render_email_html(dossier, report, sources, fixture), "utf-8")
+        files["html"].write_text(render_email_html(dossier, report, sources, fixture, unreviewed), "utf-8")
         files["text"] = out_dir / "email.txt"
-        files["text"].write_text(render_email_text(dossier, report, sources, fixture), "utf-8")
+        files["text"].write_text(render_email_text(dossier, report, sources, fixture, unreviewed), "utf-8")
+        if unreviewed:
+            files["mechanical_report"] = out_dir / "mechanical-report.json"
+            files["mechanical_report"].write_text(json.dumps(mechanical_report(
+                report, mode, meta, files["html"], files["text"]), indent=2) + "\n", "utf-8")
     else:
         files["limitation"] = _limitation(out_dir, report)
+
+
+def mechanical_report(report: VerificationReport, mode: str, meta: dict, html: Path, text: Path) -> dict:
+    """Machine-readable outcome of the mechanical checks for an unreviewed edition, bound to the exact
+    rendered bytes. It asserts that human review is ABSENT; it is not an approval of any kind."""
+    return {"format": MECHANICAL_REPORT_FORMAT, "run_id": meta["run_id"], "run_status": meta["status"],
+            "provider": meta["provider"], "retrieval": mode, "research_status": report.status,
+            "human_review": "absent", "unreviewed": True, "reviewer": None,
+            "verified_findings": len(report.verified), "distinct_works": report.distinct_works,
+            "problems": list(report.problems),
+            "email_html_sha256": hashlib.sha256(html.read_bytes()).hexdigest(),
+            "email_txt_sha256": hashlib.sha256(text.read_bytes()).hexdigest()}
 
 
 def _claude_policy(settings: Settings, mode: RetrievalMode) -> str:
@@ -321,8 +339,10 @@ def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, sess
 
 
 def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: Path,
-                  env: Mapping[str, str] | None = None) -> CalmDownResult:
-    """Research only. Produces a bundle for review, never an email."""
+                  env: Mapping[str, str] | None = None, unreviewed: bool = False) -> CalmDownResult:
+    """Research. By default it produces a bundle for human review and never an email. With the explicit
+    ``unreviewed=True`` opt-in it also renders a bannered, mechanically checked edition; only the human
+    support gate is skipped and no approval or reviewer is ever recorded."""
     if mode == "live" and settings.provider == "mock":
         raise ValueError("live retrieval with the mock provider would mix fixture content with live sources")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -350,12 +370,13 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
                                     problems=[f"research run failed ({record.error_class}): {record.error}"])
     if dossier is not None:
         # No approvals are ever applied here: approval belongs to finalize, on the saved bundle.
-        report = verify_dossier(dossier, session.read_sources(), None)
+        report = verify_dossier(dossier, session.read_sources(), None, unreviewed)
     if session.errors:
         report.problems.extend(f"retrieval error (non-fatal): {e}" for e in session.errors)
 
     if dossier is not None:
         bundle = {"format": BUNDLE_FORMAT, "fear": fear, "mode": mode, "run_meta": meta,
+                  **({"human_review": "absent"} if unreviewed else {}),
                   "dossier": dossier.model_dump(mode="json"),
                   "sources": [dict(s.provenance(), text=s.text) for s in sources.values()]}
         files["bundle"] = out_dir / "bundle.json"

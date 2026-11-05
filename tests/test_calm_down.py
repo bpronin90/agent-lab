@@ -1384,6 +1384,40 @@ def test_clearing_the_guarantee_false_positive_does_not_complete_a_bad_dossier()
     assert any(r.item == "F8" for r in report.rejected)
 
 
+@pytest.mark.parametrize("text", [
+    "Nobody is safe forever, but nobody needs a bunker either.",
+    "It is murky. No one is safe forever.",
+    "No job is safe forever; no profession is safe forever.",
+    "Nobody can promise you are safe forever.",
+    "It describes the most likely outcome, not a guarantee.",
+    "This is no guarantee, and there is no proof yet.",
+    "The study doesn't prove replacement, and the trend is not proven.",
+])
+def test_negated_guarantee_wording_is_a_disclaimer(text):
+    assert not _guarantee_problems(verify_mutated(lambda d: d.update(verdict=text)))
+
+
+@pytest.mark.parametrize("text", [
+    "Not a guarantee, but accountants are safe.",
+    "Nobody is safe forever, and accountants are safe.",
+    "This proves lawyers are safe.",
+    "Your job is guaranteed.",
+    "It is proven that AI fails.",
+    "No one is safe forever, yet this profession is safe forever.",
+    "AI will never prove capable of replacing accountants.",
+    "Lawyers will never be guaranteed work, but accountants will never be automated.",
+])
+def test_negated_disclaimer_does_not_hide_a_guarantee(text):
+    assert _guarantee_problems(verify_mutated(lambda d: d.update(verdict=text)))
+
+
+def test_research_and_synthesis_instructions_name_the_filtered_words():
+    from agent_lab.agents.calm_down import INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS
+    for text in (INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS):
+        for word in ('"guarantee"', '"proven"', '"safe forever"', '"is safe"', "not a guarantee"):
+            assert word in text
+
+
 def test_changed_verdict_with_disclaimer_still_needs_fresh_human_approval():
     report = verify_mutated(lambda d: d.update(verdict=_SAVED_VERDICT))
     assert not _guarantee_problems(report)

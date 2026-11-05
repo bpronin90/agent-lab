@@ -2111,7 +2111,7 @@ def test_claude_bls_failure_is_terminal_without_retry_or_synthesis(tmp_path, fak
     assert len(launches()) == 1 and rec.requests == 1  # no synthesis, no retry, no third launch
     bls = _bls_urls(seen)
     first = BLS_INDEX if where == "index" else _empsit(R1)
-    assert bls.count(first) == (retrieval.MAX_REDIRECTS + 1 if kind == "loop" else 1)
+    assert bls.count(first) == (retrieval.MAX_REDIRECTS + 1 if kind == "loop" and where == "index" else 1)
     assert _empsit(R2) not in bls  # nothing after the failure
     assert all(httpx.URL(u).host in (retrieval.OPENALEX_HOST, retrieval.BLS_HOST) for u in seen)
     assert any("BLS" in e for e in result.report.problems)
@@ -2237,3 +2237,40 @@ def test_bls_instructions_reach_every_model_path():
     for text in (INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS):
         assert "8. Official statistics" in text and "AI causation" in text and "counts for both sides" in text
     assert "you do not request them" in PLAN_INSTRUCTIONS and "bls_employment_releases" in INSTRUCTIONS
+
+
+@pytest.mark.parametrize("where", ["index", "release"])
+def test_tool_agent_bls_failure_is_terminal_with_no_further_model_request(tmp_path, monkeypatch, where):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    seen = _bls_web(monkeypatch, **({"index": _fail("503")} if where == "index" else {"releases": {_empsit(R1): _fail("503")}}))
+    calls = []
+
+    def model(messages, info):
+        calls.append(1)
+        if len(calls) == 1:
+            return ModelResponse(parts=[ToolCallPart("bls_employment_releases", {"query": "AI and jobs"})])
+        return ModelResponse(parts=[TextPart(json.dumps(load_mock_dossier()))])
+
+    monkeypatch.setattr(runtime, "build_model", lambda s, m=None: FunctionModel(model, model_name="fn"))
+    monkeypatch.setattr(runtime, "_sleep", lambda s: pytest.fail("no retry expected"))
+    settings = dataclasses.replace(OFFLINE, provider="gemini", min_request_interval_seconds=0.0)
+    result = run_calm_down(LABOR_FEAR, settings, "live", tmp_path)
+    assert result.record.status == "failed" and result.record.error_class == "tool"
+    assert len(calls) == 1 and result.record.requests == 1  # the model is never asked to continue
+    assert result.dossier is None and not (tmp_path / "bundle.json").exists()
+    assert _empsit(R2) not in seen
+
+
+@pytest.mark.parametrize("target", ["https://www.bls.gov/bls/news-release/empsit.htm",
+                                    "https://www.bls.gov/news.release/archives/empsit_01052001.htm",
+                                    "same_host_other_recent"])
+def test_redirected_release_is_refused_and_not_dated(tmp_path, fake_claude, monkeypatch, target):
+    if target == "same_host_other_recent":
+        target = _empsit(TODAY - timedelta(days=5))
+    launches = fake_claude(plan=LABOR_PLAN)
+    seen = _bls_web(monkeypatch, releases={_empsit(R1): lambda r: httpx.Response(302, headers={"location": target})})
+    result = run_calm_down(LABOR_FEAR, claude_settings(), "live", tmp_path)
+    assert result.record.status == "failed" and result.record.error_class == "tool"
+    assert len(launches()) == 1 and not (tmp_path / "bundle.json").exists()
+    assert any("publication date cannot be verified" in p for p in result.report.problems)
+    assert target not in _bls_urls(seen)[1:]  # the redirect target was never requested or registered

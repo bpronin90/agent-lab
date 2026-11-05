@@ -351,12 +351,14 @@ logging.setLogRecordFactory(_redacting_record_factory)
 
 
 def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True, *,
-             keyed: bool = False, pin_host: str | None = None) -> tuple[str, httpx.Response, bytes]:
+             keyed: bool = False, pin_host: str | None = None,
+             no_redirects: bool = False) -> tuple[str, httpx.Response, bytes]:
     """GET with allowlist checks on every hop and a hard byte cap.
 
     ``keyed`` marks a URL carrying the OpenAlex key: a redirect that would leave
     api.openalex.org is refused, so the key never reaches another host. ``pin_host`` likewise
-    refuses any redirect that leaves that host, before the next hop is requested."""
+    refuses any redirect that leaves that host, before the next hop is requested, and ``no_redirects``
+    refuses every redirect without following it."""
     own = client is None
     client = client or _client()
     try:
@@ -364,6 +366,8 @@ def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True,
             check_url(url, resolve=resolve)
             with client.stream("GET", url) as response:
                 if response.is_redirect:
+                    if no_redirects:
+                        raise RetrievalError("redirect refused: the publication date cannot be verified")
                     location = response.headers.get("location", "")
                     url = urljoin(url, location)
                     if keyed and (urlsplit(url).hostname or "").lower() != OPENALEX_HOST:
@@ -622,9 +626,8 @@ def read_bls_release(release: BlsRelease) -> str:
     failure = None
     try:
         _reserve_fetch(session, "bls_release_fetches", BLS_MAX_RELEASES)
-        final_url, response, body = safe_get(release.url, pin_host=BLS_HOST)
-        if (urlsplit(final_url).hostname or "").lower() != BLS_HOST:
-            raise RetrievalError("BLS release redirected off www.bls.gov")
+        # The publication date belongs to the discovered link, so redirected content is never accepted.
+        final_url, response, body = safe_get(release.url, pin_host=BLS_HOST, no_redirects=True)
         if "html" not in response.headers.get("content-type", ""):
             raise RetrievalError(f"unsupported content type {response.headers.get('content-type', '')!r}")
         title, text = html_to_text(body.decode(response.encoding or "utf-8", errors="replace"))
@@ -650,7 +653,16 @@ def read_bls_release(release: BlsRelease) -> str:
 def bls_employment_releases(query: str) -> str:
     """Read up to two recent official BLS Employment Situation releases (aggregate U.S. employment
     data) when the query is about jobs or the labor market. They measure outcomes; they do not show
-    whether AI caused them. Call at most once."""
+    whether AI caused them. Call at most once. A fetch or safety failure ends the run."""
+    try:
+        return _bls_employment_releases(query)
+    except ModelRetry as exc:
+        # Terminal, as on the Claude path: safe_tool turns a non-ModelRetry into a tool error, so the
+        # model is never asked to continue after a failed BLS fetch.
+        raise RetrievalError(str(exc)) from None
+
+
+def _bls_employment_releases(query: str) -> str:
     if not labor_market_query(query):
         return "Not a labor-market query: no BLS release applies."
     session = current_session()

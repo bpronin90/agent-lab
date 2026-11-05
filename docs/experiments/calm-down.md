@@ -127,7 +127,8 @@ releases, through the same `safe_get` path. No paid API, new provider, dependenc
 - **Trust boundary.** Application-owned discovery seed (`BLS_CATALOG`: the Employment Situation
   archive index on `www.bls.gov`) → untrusted index links and release content → the catalog link
   pattern (`news.release/archives/empsit_MMDDYYYY.htm`) plus `check_url`/`safe_get` on every hop, with
-  redirects pinned to `www.bls.gov` → recorded source snapshots → synthesis and mechanical verification.
+  index redirects pinned to `www.bls.gov` and release redirects refused outright (a redirected page
+  cannot carry the discovered publication date) → recorded source snapshots → synthesis and mechanical verification.
   Models never supply BLS URLs, and nothing in fetched text or links can cause another fetch.
 - **Relevance rule.** Deterministic: a query (or, on the Claude path, the fear or any planned query)
   contains a labor-market word from `LABOR_TERMS` (job(s), employment, labor, workers, hiring, layoffs,
@@ -147,7 +148,8 @@ releases, through the same `safe_get` path. No paid API, new provider, dependenc
   `reference_period`, URL, retrieval time and text digest. Bundle reload, digest checks and offline
   finalize are unchanged. Both model paths are told (rule 8) that releases measure aggregate outcomes,
   not AI causation, displacement, forecasts or exposure, and that a release never counts for both sides.
-  The tool-calling agent reaches them with `bls_employment_releases` (one effective call per run).
+  The tool-calling agent reaches them with `bls_employment_releases` (one effective call per run); a
+  BLS fetch or safety failure there is a terminal tool error, never a retry prompt to the model.
 - Offline tests use synthetic BLS HTML. They do not establish compatibility with live BLS markup or that
   any release supports a claim.
 

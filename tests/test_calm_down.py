@@ -2336,3 +2336,18 @@ def test_release_read_via_fetch_url_keeps_bls_provenance(monkeypatch):
             assert s.text_sha256 == hashlib.sha256(s.text.encode()).hexdigest()
             assert f"source_id={s.source_id}" in snapshots and f"Publication date: {s.published}" in snapshots
     assert len(_bls_urls(seen)) == 4
+
+
+def test_delayed_index_redirect_after_deadline_sends_no_next_request(monkeypatch):
+    state = {"expired": False}
+
+    def slow_redirect(request):
+        state["expired"] = True  # the response arrives after the shared deadline
+        return httpx.Response(302, headers={"location": "https://www.bls.gov/next"})
+
+    seen = _bls_web(monkeypatch, index=slow_redirect)
+    with research_session("live", reference_date=TODAY) as session:
+        session.expired = lambda: state["expired"]
+        with pytest.raises(retrieval.ModelRetry, match="deadline"):
+            retrieval.discover_bls_releases()
+    assert _bls_urls(seen) == [BLS_INDEX]  # /next was never requested

@@ -355,17 +355,21 @@ logging.setLogRecordFactory(_redacting_record_factory)
 
 def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True, *,
              keyed: bool = False, pin_host: str | None = None,
-             no_redirects: bool = False) -> tuple[str, httpx.Response, bytes]:
+             no_redirects: bool = False, expired: Callable[[], bool] | None = None,
+             ) -> tuple[str, httpx.Response, bytes]:
     """GET with allowlist checks on every hop and a hard byte cap.
 
     ``keyed`` marks a URL carrying the OpenAlex key: a redirect that would leave
     api.openalex.org is refused, so the key never reaches another host. ``pin_host`` likewise
     refuses any redirect that leaves that host, before the next hop is requested, and ``no_redirects``
-    refuses every redirect without following it."""
+    refuses every redirect without following it. ``expired`` is checked before every hop, so no
+    request (including a redirect) starts after a shared deadline."""
     own = client is None
     client = client or _client()
     try:
         for _ in range(MAX_REDIRECTS + 1):
+            if expired is not None and expired():
+                raise RetrievalError("deadline expired before the next request")
             check_url(url, resolve=resolve)
             with client.stream("GET", url) as response:
                 if response.is_redirect:
@@ -604,7 +608,7 @@ def discover_bls_releases() -> list[BlsRelease]:
     failure = None
     try:
         _reserve_fetch(session, "bls_index_fetches", BLS_INDEX_FETCHES)
-        final_url, response, body = safe_get(BLS_CATALOG[0], pin_host=BLS_HOST)
+        final_url, response, body = safe_get(BLS_CATALOG[0], pin_host=BLS_HOST, expired=session.expired)
         if (urlsplit(final_url).hostname or "").lower() != BLS_HOST:
             raise RetrievalError("BLS index redirected off www.bls.gov")
         if "html" not in response.headers.get("content-type", ""):
@@ -630,7 +634,7 @@ def read_bls_release(release: BlsRelease) -> str:
     try:
         _reserve_fetch(session, "bls_release_fetches", BLS_MAX_RELEASES)
         # The publication date belongs to the discovered link, so redirected content is never accepted.
-        final_url, response, body = safe_get(release.url, pin_host=BLS_HOST, no_redirects=True)
+        final_url, response, body = safe_get(release.url, pin_host=BLS_HOST, no_redirects=True, expired=session.expired)
         if "html" not in response.headers.get("content-type", ""):
             raise RetrievalError(f"unsupported content type {response.headers.get('content-type', '')!r}")
         title, text = html_to_text(body.decode(response.encoding or "utf-8", errors="replace"))

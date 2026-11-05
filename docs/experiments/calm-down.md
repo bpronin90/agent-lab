@@ -151,7 +151,7 @@ releases, through the same `safe_get` path. No paid API, new provider, dependenc
   not AI causation, displacement, forecasts or exposure, and that a release never counts for both sides.
   The tool-calling agent reaches them with `bls_employment_releases` (one effective call per run); a
   BLS fetch or safety failure there is a terminal tool error, never a retry prompt to the model. The tool
-  runs under the runtime's shared deadline: no request starts after it, and a slower fetch (for example a
+  runs under the runtime's shared deadline: no request (including a redirect hop, on either path) starts after it, and a slower fetch (for example a
   trickling stream) is abandoned and fails the tool. Releases use their own `BLS…` source ids, so a page
   read earlier through `fetch_url` never replaces the dated release record.
 - Offline tests use synthetic BLS HTML. They do not establish compatibility with live BLS markup or that

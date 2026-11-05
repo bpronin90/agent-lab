@@ -11,6 +11,8 @@ also a hands-on way to learn Docker and Kubernetes.
   Calm Down research alone can also run manually through the Claude CLI on an existing
   subscription (`AGENT_LAB_PROVIDER=claude-cli`, two gated launches); see
   [docs/experiments/calm-down.md](docs/experiments/calm-down.md).
+  Calm Down live search can use an optional free OpenAlex key from `OPENALEX_API_KEY` (sent only to
+  `api.openalex.org`, never logged).
 - **Demo agent:** three safe tools (`calculate`, `current_time`, `lookup_note`). None of them
   touches the network or the filesystem.
 - **Packaging:** Docker image and Docker Compose for local development.

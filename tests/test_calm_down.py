@@ -1017,3 +1017,139 @@ def test_claude_selection_refused_outside_calm_down_before_side_effects(tmp_path
     monkeypatch.setattr(httpx.Client, "send", boom)
     record = runtime.run_agent("hello", Settings.from_env(CLAUDE_ENV), "demo")
     assert record.status == "failed" and record.error_class == "config" and record.requests == 0
+
+
+# --------------------------------------------------------------------------- OpenAlex API key (#26)
+
+OA_KEY = "test-openalex-key/+="  # fake; characters that URL-encoding changes
+
+
+def _openalex_handler(seen, fail=None):
+    def handler(request):
+        seen.append(str(request.url))
+        if fail == "connect":
+            raise httpx.ConnectError(f"boom contacting {request.url}")
+        if fail == "redirect":
+            return httpx.Response(302, headers={"location": f"https://doi.org/x?{request.url.query.decode()}"})
+        if fail == "http":
+            return httpx.Response(503, text="Anonymous search is paused")
+        work = {"id": "https://openalex.org/W1", "display_name": "Paper", "doi": "https://doi.org/10.1/x",
+                "publication_year": 2024, "primary_location": {"source": {"display_name": "J"}},
+                "abstract_inverted_index": {"hello": [0], "world": [1]}}
+        return httpx.Response(200, json={"results": [work]})
+    return handler
+
+
+@pytest.fixture
+def openalex(monkeypatch):
+    """Route live retrieval to a mock transport; public DNS is faked so no network is touched."""
+    monkeypatch.setattr(retrieval.socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("93.184.216.34", 443))])
+
+    def install(fail=None):
+        seen = []
+        monkeypatch.setattr(retrieval, "_client", lambda: _mock_client(_openalex_handler(seen, fail)))
+        return seen
+    return install
+
+
+def test_openalex_key_is_sent_as_api_key_param(monkeypatch, openalex):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    seen = openalex()
+    with research_session("live"):
+        assert "OAW1" in retrieval.search_sources("ai jobs")
+    assert len(seen) == 1
+    url = httpx.URL(seen[0])
+    assert url.host == "api.openalex.org" and url.params["api_key"] == OA_KEY
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_openalex_request_unchanged_without_key(monkeypatch, openalex, value):
+    if value is None:
+        monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENALEX_API_KEY", value)
+    seen = openalex()
+    with research_session("live"):
+        retrieval.search_sources("ai jobs")
+    expected = (f"{retrieval.OPENALEX_URL}?search=ai+jobs&per-page={retrieval.MAX_RESULTS_PER_SEARCH}"
+                "&filter=has_abstract:true&select=id,display_name,doi,publication_year,primary_location,"
+                "abstract_inverted_index")
+    assert seen == [str(httpx.URL(expected))] and "api_key" not in seen[0]
+
+
+def test_openalex_key_never_follows_redirect_to_another_host(monkeypatch, openalex):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    seen = openalex(fail="redirect")
+    with research_session("live") as session, pytest.raises(retrieval.ModelRetry) as info:
+        retrieval.search_sources("ai jobs")
+    assert len(seen) == 1 and "redirect away from api.openalex.org" in str(info.value)  # doi.org never contacted
+    assert all(OA_KEY not in e and "test-openalex-key" not in e for e in session.errors)
+
+
+def test_keyed_redirect_within_openalex_is_followed():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.host)
+        if len(seen) == 1:
+            return httpx.Response(301, headers={"location": "/works?search=x"})
+        return httpx.Response(200, text="{}")
+    safe_get("https://api.openalex.org/w?api_key=k", client=_mock_client(handler), resolve=False, keyed=True)
+    assert seen == ["api.openalex.org", "api.openalex.org"]
+
+
+def test_openalex_key_never_sent_on_fetch(monkeypatch, openalex):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, text="<title>T</title><p>Body</p>", headers={"content-type": "text/html"})
+    monkeypatch.setattr(retrieval, "_client", lambda: _mock_client(handler))
+    with research_session("live"):
+        retrieval.fetch_url("https://www.nber.org/papers/w1")
+        retrieval.fetch_url("https://api.openalex.org/works/W1")
+    assert seen and all("api_key" not in u and "test-openalex-key" not in u for u in seen)
+
+
+@pytest.mark.parametrize("fail", ["connect", "http"])
+def test_openalex_key_redacted_from_errors(monkeypatch, openalex, fail):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    openalex(fail=fail)
+    with research_session("live") as session, pytest.raises(retrieval.ModelRetry) as info:
+        retrieval.search_sources("ai jobs")
+    texts = [str(info.value), repr(info.value.__cause__), *session.errors]
+    assert session.errors
+    for text in texts:
+        assert "test-openalex-key" not in text and retrieval.quote_plus(OA_KEY) not in text
+
+
+def test_retrieval_error_with_keyed_url_is_redacted(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    keyed = f"http://api.openalex.org/works?api_key={retrieval.quote_plus(OA_KEY)}"
+    with pytest.raises(RetrievalError) as info:
+        check_url(keyed, resolve=False)
+    assert "test-openalex-key" in str(info.value)  # the raw safety message embeds the URL...
+    assert "test-openalex-key" not in retrieval.redact(str(info.value))  # ...and redact removes it
+    assert retrieval.redact("plain text") == "plain text"
+
+
+def test_openalex_key_absent_from_subprocess_env():
+    env = claude_cli.build_env({"PATH": "/usr/bin", "HOME": "/home/x", "OPENALEX_API_KEY": OA_KEY})
+    assert "OPENALEX_API_KEY" not in env and OA_KEY not in json.dumps(env)
+
+
+@pytest.mark.parametrize("fail", [None, "connect"])
+def test_openalex_key_absent_from_outputs_record_and_claude(tmp_path, fake_claude, monkeypatch, openalex, fail):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    launches = fake_claude()
+    seen = openalex(fail=fail)
+    out = tmp_path / "out"
+    result = run_calm_down(FEAR, claude_settings(), "live", out)
+    assert seen and all(httpx.URL(u).params.get("api_key") == OA_KEY for u in seen)  # key was really used
+    files = [p for p in out.rglob("*") if p.is_file()]
+    assert files
+    blobs = [p.read_text(errors="replace") for p in files]
+    blobs += [result.record.model_dump_json(), result.record.config_hash or "", json.dumps(launches())]
+    for blob in blobs:
+        assert "test-openalex-key" not in blob and "OPENALEX_API_KEY" not in blob

@@ -4,8 +4,8 @@ Two backends share one `ResearchSession`:
 
 * ``fixture`` (default): a hand-written, clearly labeled offline corpus. It exercises the
   pipeline deterministically. It does NOT validate live research.
-* ``live`` (opt-in, ``AGENT_LAB_CALM_DOWN_RETRIEVAL=live``): OpenAlex search (free, no key)
-  plus HTTPS fetches restricted to an allowlist of research, government and professional hosts.
+* ``live`` (opt-in, ``AGENT_LAB_CALM_DOWN_RETRIEVAL=live``): OpenAlex search (free; an optional
+  ``OPENALEX_API_KEY`` is sent only to api.openalex.org and redacted from every error) plus HTTPS fetches restricted to an allowlist of research, government and professional hosts.
 
 Every source the model reads is recorded with its URL, retrieval time, SHA-256 of the exact
 text the model saw, and the backend that produced it. Verification later checks quotes
@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from importlib import resources
 from typing import Literal
-from urllib.parse import quote_plus, urljoin, urlsplit
+from urllib.parse import quote, quote_plus, urljoin, urlsplit
 
 import httpx
 from pydantic_ai import ModelRetry
@@ -39,6 +39,8 @@ RETRIEVAL_ENV = "AGENT_LAB_CALM_DOWN_RETRIEVAL"
 
 USER_AGENT = "agent-lab-calm-down/0.1 (+https://github.com/bpronin90/agent-lab; research bot)"
 OPENALEX_URL = "https://api.openalex.org/works"
+OPENALEX_HOST = "api.openalex.org"
+OPENALEX_KEY_ENV = "OPENALEX_API_KEY"
 MAX_SEARCHES = 8
 MAX_READS = 14
 MAX_RESULTS_PER_SEARCH = 5
@@ -259,8 +261,27 @@ def _client() -> httpx.Client:
                         headers={"User-Agent": USER_AGENT, "Accept": "text/html, text/plain, application/json"})
 
 
-def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True) -> tuple[str, httpx.Response, bytes]:
-    """GET with allowlist checks on every hop and a hard byte cap."""
+def openalex_key() -> str:
+    """The optional OpenAlex API key, read from the process environment at request time."""
+    return os.environ.get(OPENALEX_KEY_ENV, "").strip()
+
+
+def redact(text: str) -> str:
+    """Remove the OpenAlex key (raw or URL-encoded) from text that may reach errors or outputs."""
+    key = openalex_key()
+    if not key:
+        return text
+    for form in {key, quote_plus(key), quote(key, safe="")}:
+        text = text.replace(form, "[REDACTED]")
+    return text
+
+
+def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True, *,
+             keyed: bool = False) -> tuple[str, httpx.Response, bytes]:
+    """GET with allowlist checks on every hop and a hard byte cap.
+
+    ``keyed`` marks a URL carrying the OpenAlex key: a redirect that would leave
+    api.openalex.org is refused, so the key never reaches another host."""
     own = client is None
     client = client or _client()
     try:
@@ -270,6 +291,8 @@ def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True)
                 if response.is_redirect:
                     location = response.headers.get("location", "")
                     url = urljoin(url, location)
+                    if keyed and (urlsplit(url).hostname or "").lower() != OPENALEX_HOST:
+                        raise RetrievalError("redirect away from api.openalex.org refused for a keyed request")
                     continue
                 if response.status_code != 200:
                     raise RetrievalError(f"HTTP {response.status_code} from {urlsplit(url).hostname}")
@@ -295,7 +318,14 @@ def _abstract(inverted: dict[str, list[int]] | None) -> str:
 def _openalex_search(session: ResearchSession, query: str) -> list[SourceRecord]:
     url = (f"{OPENALEX_URL}?search={quote_plus(query)}&per-page={MAX_RESULTS_PER_SEARCH}"
            "&filter=has_abstract:true&select=id,display_name,doi,publication_year,primary_location,abstract_inverted_index")
-    _, _, body = safe_get(url)
+    key = openalex_key()
+    if not key:
+        _, _, body = safe_get(url)
+    else:
+        try:
+            _, _, body = safe_get(f"{url}&api_key={quote_plus(key)}", keyed=True)
+        except (RetrievalError, httpx.HTTPError) as exc:
+            raise RetrievalError(redact(str(exc))) from None
     results = []
     for work in json.loads(body).get("results", [])[:MAX_RESULTS_PER_SEARCH]:
         source_id = "OA" + work["id"].rsplit("/", 1)[-1]
@@ -355,8 +385,9 @@ def search_sources(query: str) -> str:
     try:
         results = _fixture_search(session, query) if session.mode == "fixture" else _openalex_search(session, query)
     except (RetrievalError, httpx.HTTPError, ValueError) as exc:
-        session.errors.append(f"search {query!r}: {exc}")
-        raise ModelRetry(f"search failed: {exc}. Try another query or report the limitation.") from exc
+        detail = redact(str(exc))
+        session.errors.append(redact(f"search {query!r}: {detail}"))
+        raise ModelRetry(f"search failed: {detail}. Try another query or report the limitation.") from exc
     if not results:
         return "No results."
     return json.dumps([r.listing() for r in results])
@@ -395,8 +426,8 @@ def fetch_url(url: str) -> str:
     try:
         rec = _fetch_page(session, url)
     except (RetrievalError, httpx.HTTPError, UnicodeError) as exc:
-        session.errors.append(f"fetch {url!r}: {exc}")
-        raise ModelRetry(f"fetch refused or failed: {exc}") from exc
+        session.errors.append(redact(f"fetch {url!r}: {exc}"))
+        raise ModelRetry(redact(f"fetch refused or failed: {exc}")) from exc
     return _mark_read(rec)
 
 

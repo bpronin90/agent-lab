@@ -91,7 +91,13 @@ Exit codes: `0` edition rendered (finalize), `4` research insufficient, `5` wait
 
 ## Live retrieval safety
 
-- Search uses the free [OpenAlex](https://openalex.org) works API (no key). Its abstracts become the source text.
+- Search uses the free [OpenAlex](https://openalex.org) works API. Its abstracts become the source text.
+- `OPENALEX_API_KEY` (optional, environment only) authenticates search with a free OpenAlex key
+  (about a $1/day budget, no billing enabled). Without it, search is anonymous and shares a small
+  per-IP budget that OpenAlex can pause under load (HTTP 503 "Anonymous search is paused").
+  The key is added as the `api_key` parameter to OpenAlex search requests only: never to
+  `fetch_url` or another host, a keyed request that redirects away from `api.openalex.org` is refused,
+  it is redacted from errors, and it is not passed to the Claude CLI or any model or saved output.
 - `fetch_url` accepts only HTTPS, standard port, no embedded credentials, and an allowlist of research, government, court and professional hosts (`ALLOWED_HOSTS`). Every redirect hop is re-checked. Hosts that resolve to non-public IPs are refused.
 - Caps: 8 searches, 14 reads, 5 results per search, 2 MB per response, 15 s timeout, 6000 characters of text per source. PDFs are not parsed.
 - No cookies or auth headers are sent. Source text is wrapped in untrusted-data markers, and the instructions tell the model to ignore instructions inside it.

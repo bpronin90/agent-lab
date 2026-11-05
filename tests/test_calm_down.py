@@ -707,6 +707,89 @@ def test_instruction_length_budgets_stay_under_schema_limits():
     assert int(budgets["each claim"]) <= limit(Finding, "claim")
 
 
+# ---------------------------------------------------------------- synthesis self-check prompt (#29)
+
+NOT_MERELY = "The assistant is not merely a typing aid, and it also changes how novices learn the job."
+
+
+def _with_not_merely(claim):
+    """F8 re-pointed at a synthetic excerpt containing 'not merely', appended verbatim to its source."""
+    sources = read_all_fixture_sources()
+    data = load_mock_dossier()
+    f8 = finding(data, "F8")
+    f8.update(claim=claim, evidence_quote=NOT_MERELY)
+    sid = f8["source_ids"][0]
+    sources[sid].text += " " + NOT_MERELY
+    return verify_dossier(CalmDownDossier.model_validate(data), sources)
+
+
+def test_synthesis_instructions_add_self_check_and_leave_shared_prompts_alone():
+    from agent_lab.agents.calm_down import INSTRUCTIONS, PLAN_INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS
+    assert SYNTHESIS_INSTRUCTIONS.startswith("PHASE: SYNTHESIZE")
+    assert "FINAL SELF-CHECK" in SYNTHESIS_INSTRUCTIONS and "FINAL SELF-CHECK" not in INSTRUCTIONS
+    for needle in ("A year is a number", "2023", "2020", "not merely", "agree on negation",
+                   "Never alter", "stitch", "sanctions", "finding_ids", 'status="insufficient"'):
+        assert needle in SYNTHESIS_INSTRUCTIONS, needle
+    # Existing constraints are preserved, and the planning and shared prompts carry no synthesis checklist.
+    assert INSTRUCTIONS[INSTRUCTIONS.index("3. evidence_quote"):] in SYNTHESIS_INSTRUCTIONS
+    assert "Hard length budgets" in SYNTHESIS_INSTRUCTIONS and "untrusted data" in SYNTHESIS_INSTRUCTIONS
+    assert "SELF-CHECK" not in PLAN_INSTRUCTIONS and PLAN_INSTRUCTIONS.startswith("PHASE: PLAN")
+
+
+def test_self_check_reaches_the_synthesis_launch_only(tmp_path, fake_claude):
+    launches = fake_claude()
+    run_calm_down(FEAR, claude_settings(), "fixture", tmp_path)
+    plan, synth = [r["stdin"] for r in launches()]
+    assert len(launches()) == 2
+    assert "FINAL SELF-CHECK" in synth and "A year is a number" in synth and "not merely" in synth
+    assert "FINAL SELF-CHECK" not in plan and "PHASE: PLAN" in plan
+
+
+@pytest.mark.parametrize("fid,year", [("F5", "2023"), ("F6", "2020")])
+def test_caveat_year_absent_from_own_quote_still_fails(fid, year):
+    report = verify_mutated(lambda d: finding(d, fid).update(caveat=f"A single case from {year}, so be careful."))
+    assert any(f"{fid}.caveat" in p and year in p for p in report.problems) and not report.ok
+
+
+def test_caveat_year_present_in_own_quote_passes():
+    report = verify_mutated(lambda d: finding(d, "F12").update(caveat="The projection covers 2023 to 2033 only."))
+    assert not any("F12.caveat" in p for p in report.problems)
+
+
+def test_not_merely_quote_with_affirmative_claim_fails_negation():
+    report = _with_not_merely("A generative AI assistant helps workers learn the job faster than before.")
+    assert any(r.item == "F8" and "negation" in r.reason for r in report.rejected)
+
+
+def test_faithful_negated_pair_passes_the_negation_check():
+    report = _with_not_merely("The assistant is not merely a typing aid; it also changes how novices learn.")
+    assert not any(r.item == "F8" for r in report.rejected)
+
+
+def test_claim_adding_unsupported_sanction_content_is_not_made_valid_by_negation_alone():
+    # The mechanical check cannot see unsupported content, so the changed claim still needs human approval.
+    report = _with_not_merely("The assistant is not merely a typing aid, and courts sanctioned firms that misused it.")
+    assert not any(r.item == "F8" for r in report.rejected)
+    assert report.status == "needs_review" and "F8" in report.pending_review
+
+
+@pytest.mark.parametrize("section", ["doomers_get_right", "reasons_to_chill"])
+def test_omitted_finding_left_in_section_is_rejected(section):
+    def mutate(d):
+        d["findings"] = [f for f in d["findings"] if f["id"] != "F5"]
+        d[section].append("F5")
+    report = verify_mutated(mutate)
+    assert not report.ok and any(section in p and "F5" in p for p in report.problems)
+
+
+def test_omitted_finding_left_in_advice_is_rejected():
+    def mutate(d):
+        d["findings"] = [f for f in d["findings"] if f["id"] != "F5"]
+        d["adapt"][0]["finding_ids"] = ["F5"]
+    report = verify_mutated(mutate)
+    assert not report.ok and any("adapt[0]" in p and "unverified" in p for p in report.problems)
+
+
 # ---------------------------------------------------------------- Claude CLI two-phase research (#21)
 
 import os  # noqa: E402

@@ -1404,6 +1404,8 @@ def test_negated_guarantee_wording_is_a_disclaimer(text):
     "Your job is guaranteed.",
     "It is proven that AI fails.",
     "No one is safe forever, yet this profession is safe forever.",
+    "AI will never prove capable of replacing accountants.",
+    "Lawyers will never be guaranteed work, but accountants will never be automated.",
 ])
 def test_negated_disclaimer_does_not_hide_a_guarantee(text):
     assert _guarantee_problems(verify_mutated(lambda d: d.update(verdict=text)))

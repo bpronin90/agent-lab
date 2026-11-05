@@ -53,6 +53,16 @@ _NEGATED_GUARANTEE = re.compile(
     r"\b(?:not|no|never|neither|nor|without|(?:is|are|was|were|does|do|did)n't|cannot|can't)\s+"
     r"(?:(?:a|an|any|the|yet|been|be|itself|by\s+itself)\s+)*"
     r"(?:guarantee[ds]?|proves?|proven|proof)\b", re.I)
+
+
+def _makes_guarantee(text: str) -> bool:
+    """A guarantee match is exempt only if it lies wholly inside a negated span, so an overlapping
+    phrase such as "will never" in "will never prove" is still rejected."""
+    text = _DENIED_GUARANTEE.sub(r"\1[disclaimer]", text)
+    negated = [m.span() for m in _NEGATED_GUARANTEE.finditer(text)]
+    return any(not any(s <= m.start() and m.end() <= e for s, e in negated) for m in _GUARANTEE.finditer(text))
+
+
 _NEGATION = re.compile(r"\b(no|not|none|never|nothing|neither|nor|cannot|fail(?:s|ed)?\s+to)\b|n't\b", re.I)
 _TRANSLATE = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"',
                             "–": "-", "—": "-", " ": " "})
@@ -156,7 +166,7 @@ def editorial_hash(dossier: CalmDownDossier) -> str:
 def _check_text(name: str, text: str, allowed_numbers: set[str], problems: list[str]) -> None:
     if _URL.search(text):
         problems.append(f"{name}: model-written text may not contain URLs or domains")
-    if _GUARANTEE.search(_NEGATED_GUARANTEE.sub("[disclaimer]", _DENIED_GUARANTEE.sub(r"\1[disclaimer]", text))):
+    if _makes_guarantee(text):
         problems.append(f"{name}: makes a guarantee or proof claim the evidence cannot support")
     invented = numbers(text) - allowed_numbers
     if invented:

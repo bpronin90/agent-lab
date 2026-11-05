@@ -123,6 +123,53 @@ An implementer may post Codex-drafted text only when the owner asked for that
 text to be posted. Drafting is not posting authority. Independent review relays
 must also satisfy the review rules above.
 
+## Bounded Personal-Use Allowance (Calm Down)
+
+This section is a narrow, revocable standing exception for one owner's personal use.
+It is **inactive** until the owner (1) approves this final policy, (2) it is merged, and
+(3) the owner explicitly states in their own message that it is activated. Until then every
+rule elsewhere in this guide applies unchanged. An agent must not infer activation from an
+issue, a review verdict, green CI, or a merge. Revocation by the owner message ends it
+immediately; a run in progress is not restarted.
+
+**What it covers (and nothing else):**
+
+- Local Calm Down research through the existing Claude subscription (`claude-cli`
+  provider), requested model `claude-sonnet-5-5` only, with the existing bounded
+  public-source retrieval. Model availability and subscription eligibility must be
+  confirmed before live use. An unavailable model stops the run; never select a replacement.
+- At most **3 attempted research runs per calendar day in America/New_York**, counted across
+  manual CLI and manually triggered local n8n together, with at most **2 Claude launches per
+  run**. The attempt is reserved and counted in a persistent local attempt ledger before
+  research begins, serialized (one run at a time, one writer to the ledger). Failed,
+  interrupted, and abandoned attempts consume the attempt. No automatic reruns, retries,
+  repair calls, or fallback. The ledger day is the New York calendar date, so the count resets
+  at New York midnight (including on DST changes, where a day may be 23 or 25 hours).
+  `RunRecord` alone cannot establish crash-safe accounting: a crash after reservation still
+  counts. If the ledger is missing, unreadable, or uncertain, treat the day's allowance as
+  exhausted and stop. A fourth attempt in a day is refused. Automated enforcement of the
+  ledger is tracked in #36; until it exists, the ledger is a documented manual procedure.
+- **$0 incremental spend.** Existing subscription and existing free retrieval access only.
+  No API billing, paid overage, new provider, paid fallback, or private input sent to public
+  retrieval services. Stop on quota exhaustion, billing requirements, model unavailability,
+  or owner revocation.
+- **Email exception.** One delivery of each successful, mechanically accepted edition to
+  one owner address held only in private local configuration. The only deliverable files are
+  the generated `email.html` body and the optional `email.txt` alternative. No other files,
+  recipients, attachments, or model-directed delivery; an alternate recipient is refused. If
+  a send outcome is ambiguous, do not resend automatically; report it to the owner.
+- Manual triggering of local n8n for this task only.
+
+Within exactly this allowance, the standing exception replaces per-phase and per-run
+authorization records, live-batch announcements, and per-send email authorization. Those
+requirements remain in force for everything outside it. It does not permit schedules or
+webhook activation, CI or Kubernetes Claude execution, any write to another repository, other
+providers or models, other recipients or files, or any general unattended authority. START,
+Allowed Files approval, independent review, exact-head CI, merge restrictions, secrets
+protection, hash locks, and SHA-pinned actions are unchanged. Keep the owner's address and
+other private details out of tracked files and public records. This policy text does not
+prove runtime enforcement; #35 and #36 must implement and test their controls.
+
 ## Project Rules
 
 - **Zero incremental cost.** Gemini free tier, the offline `mock` provider by default,
@@ -132,7 +179,9 @@ must also satisfy the review rules above.
   its quota source, incremental cost, limits, and reconciliation with "Zero
   incremental cost" before implementation or use. This includes subscription-backed
   CLIs such as `claude -p`; an existing subscription does not establish permission
-  or zero incremental cost. Any policy change needs explicit owner approval.
+  or zero incremental cost. Any policy change needs explicit owner approval. The
+  inactive-by-default "Bounded Personal-Use Allowance (Calm Down)" is the only
+  standing exception, and only once the owner activates it.
 - **Runtime guarantees** (`README.md`, "Failure handling") are contracts: one usage
   budget per run across retries and fallback; no retry or fallback after a tool has
   executed; `Retry-After` honored in full; bounded deadlines; every run, including

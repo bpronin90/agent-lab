@@ -55,4 +55,9 @@ Rules that hold in every environment:
   A relay is transport only: it does not make the poster the reviewer or authorize merge.
 - Report exactly which checks ran. Never present simulated, skipped, or unexecuted
   validation as proven.
+- Exception: "Bounded Personal-Use Allowance (Calm Down)" in `CONTRIBUTING.md` is a
+  narrow, revocable standing allowance that is inactive until the owner explicitly
+  activates it in their own message. It replaces per-run records, batch announcements,
+  and per-send authorization only inside its exact bounds. Everything outside it,
+  including START, scope, review, merge, schedules, and other recipients, is unchanged.
 - When a rule is unclear or a needed step needs owner authority, stop and ask.

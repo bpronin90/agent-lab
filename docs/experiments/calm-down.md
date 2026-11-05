@@ -155,7 +155,7 @@ both phase instructions, phase allocations and retrieval bounds.
 `AGENT_LAB_CLAUDE_SYNTHESIS_OUTPUT_TOKENS` (default 4,000), about 5,000 output tokens per run. Each is
 checked against the CLI's *reported* usage after that response: an allocation expectation, not a
 service-side cap. Subscription capacity for a run is not proven. Every live use needs the per-launch
-authorization below, given separately for planning and synthesis.
+authorization below, unless the activated personal-use allowance applies.
 
 Offline tests (`tests/test_calm_down.py`) drive a fake `claude` executable through both phases with the
 fixture corpus and mocked retrieval failures. They validate the pipeline, not live evidence: no live
@@ -171,7 +171,11 @@ path above is its only user.
   `config` failure. This catches accidental use in marked environments only. It cannot detect cron,
   prove a human is present, verify GitHub comments, or resist someone who controls the environment.
   Scheduled or unattended use stays prohibited by policy.
-- **Per-call authorization.** Each live invocation needs its own owner authorization (planning and
+- **Per-call authorization.** Unless the owner has activated the "Bounded Personal-Use
+  Allowance (Calm Down)" in `CONTRIBUTING.md` (inactive by default; it covers only model
+  `claude-sonnet-5-5`, at most 3 attempted runs per New York calendar day with at most 2
+  launches each, recorded in a local attempt ledger, and delivery of `email.html`/`email.txt` to
+  the owner's private address), each live invocation needs its own owner authorization (planning and
   synthesis separately, at the exact commit and model, naming the phase allocation) plus the OWNER AUTHORIZATION RECORD in `CONTRIBUTING.md`. A launched call consumes that
   authorization even if it fails. Use is existing-subscription only: no API billing, paid overage, or
   automatic paid fallback. The expected live use is one research run of about 5,000 output tokens.
@@ -208,4 +212,5 @@ the installed CLI's flags, native login, subscription billing behavior, or a liv
 
 No new infrastructure is needed. The existing image and Job pattern work: override the container args with
 `["calm-down", "<fear>", "--out", "/data/runs/calm-down"]`, and collect the files from the runs volume.
-Nothing here schedules runs or sends email.
+Nothing here schedules runs or sends email. The personal-use allowance permits manually
+triggering local n8n only; it does not permit schedules, webhooks, or Kubernetes Claude execution.

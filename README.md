@@ -9,7 +9,8 @@ also a hands-on way to learn Docker and Kubernetes.
 - **Models:** Gemini free tier (`AGENT_LAB_PROVIDER=gemini`), or a deterministic **mock**
   provider (the default) that works offline with no credentials.
   Calm Down research alone can also run manually through the Claude CLI on an existing
-  subscription (`AGENT_LAB_PROVIDER=claude-cli`, two gated launches); see
+  subscription (`AGENT_LAB_PROVIDER=claude-cli`, two gated launches; live use needs owner
+  authorization unless the bounded personal-use allowance in `CONTRIBUTING.md` is activated); see
   [docs/experiments/calm-down.md](docs/experiments/calm-down.md).
   Calm Down live search can use an optional free OpenAlex key from `OPENALEX_API_KEY` (sent only to
   `api.openalex.org`, never logged).

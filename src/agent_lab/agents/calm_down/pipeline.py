@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import uuid
+from itertools import zip_longest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
@@ -38,8 +39,9 @@ from agent_lab import claude_cli
 from agent_lab.agents.calm_down import AGENT_NAME, PLAN_INSTRUCTIONS, SYNTHESIS_INSTRUCTIONS
 from agent_lab.agents.calm_down.render import render_dossier_md, render_email_html, render_email_text
 from agent_lab.agents.calm_down.retrieval import (
-    MAX_QUERY_LENGTH, MAX_READS, MAX_SEARCHES, ResearchSession, RetrievalMode, SourceRecord,
-    read_source, recent_days_from_env, research_session, search_sources,
+    BLS_INDEX_FETCHES, BLS_MAX_RELEASES, MAX_QUERY_LENGTH, MAX_READS, MAX_TEXT_CHARS, MAX_SEARCHES, ResearchSession,
+    RetrievalMode, SourceRecord, discover_bls_releases, labor_market_query, read_bls_release, read_source,
+    recent_days_from_env, research_session, search_sources,
 )
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
 from agent_lab.agents.calm_down.verify import VerificationReport, review_request, verify_dossier
@@ -69,9 +71,11 @@ MECHANICAL_REPORT_FORMAT = "calm-down-mechanical-report/1"
 # Claude CLI research bounds. The model only proposes queries; the application decides what to read.
 CLAUDE_MAX_QUERIES = 6
 CLAUDE_READS_PER_QUERY = 2
+CLAUDE_PLANNED_READS = 12  # academic plus primary-release reads; BLS releases take at most two of them
 CLAUDE_MAX_EVIDENCE_CHARS = 60_000
 CLAUDE_LAUNCHES = 2  # planning + synthesis; there is never a third
-assert CLAUDE_MAX_QUERIES <= MAX_SEARCHES and CLAUDE_MAX_QUERIES * CLAUDE_READS_PER_QUERY <= MAX_READS
+assert CLAUDE_MAX_QUERIES <= MAX_SEARCHES and CLAUDE_MAX_QUERIES * CLAUDE_READS_PER_QUERY <= CLAUDE_PLANNED_READS
+assert BLS_MAX_RELEASES <= 2 and CLAUDE_PLANNED_READS + BLS_INDEX_FETCHES <= MAX_READS
 claude_binary = "claude"
 
 
@@ -269,13 +273,25 @@ def _within_deadline(ctx: claude_cli.ClaudeCliContext, op, *args):
 
 
 def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: ResearchSession,
-              calls: list[ToolCallRecord]) -> list[str]:
+              calls: list[ToolCallRecord], fear: str = "") -> list[str]:
     """Run the plan's searches and bounded reads under the shared deadline.
-    Returns the exact snapshots shown to synthesis."""
+    Returns the exact snapshots shown to synthesis.
+
+    For a labor-market fear (the deterministic rule in ``labor_market_query``, applied to the fear and
+    the planned queries) live mode reserves two of the planned read slots, and room for two texts, then
+    reads up to two recent BLS releases after the academic reads. Releases never count toward either
+    side's coverage, and they are fetched only once both sides are covered."""
     snapshots: list[str] = []
     chars = 0
     covered: set[str] = set()
-    for item in plan.queries:
+    primary = session.mode == "live" and any(labor_market_query(t) for t in [fear, *(q.query for q in plan.queries)])
+    academic_reads = 0
+    academic_read_cap = CLAUDE_PLANNED_READS - (BLS_MAX_RELEASES if primary else 0)
+    academic_char_cap = CLAUDE_MAX_EVIDENCE_CHARS - (BLS_MAX_RELEASES * MAX_TEXT_CHARS if primary else 0)
+    # Alternate sides (each keeping its planned order) so a reduced read cap cannot starve one side.
+    by_side = [[q for q in plan.queries if q.side == side] for side in ("supports_fear", "challenges_fear")]
+    ordered = [q for pair in zip_longest(*by_side) for q in pair if q is not None]
+    for item in ordered:
         calls.append(ToolCallRecord(tool_name="search_sources", args={"query": item.query}))
         listing = _within_deadline(ctx, search_sources, item.query)
         if listing == "No results.":
@@ -283,23 +299,30 @@ def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: Resear
         taken = 0
         for entry in json.loads(listing):
             rec = session.sources[entry["source_id"]]
-            if taken >= CLAUDE_READS_PER_QUERY:
+            if taken >= CLAUDE_READS_PER_QUERY or academic_reads >= academic_read_cap:
                 break
             if rec.read:
                 covered.add(item.side)  # already in the evidence from an earlier query
                 continue
-            if not rec.text or chars + len(rec.text) > CLAUDE_MAX_EVIDENCE_CHARS:
+            if not rec.text or chars + len(rec.text) > academic_char_cap:
                 continue
             calls.append(ToolCallRecord(tool_name="read_source", args={"source_id": rec.source_id}))
             snapshot = _within_deadline(ctx, read_source, rec.source_id)
             snapshots.append(snapshot)
             chars += len(rec.text)
             taken += 1
+            academic_reads += 1
             covered.add(item.side)
     _require_time(ctx)
     if covered != {"supports_fear", "challenges_fear"}:
         # Synthesis never runs without evidence on both sides: no reassurance from nothing.
         raise claude_cli.ClaudeCliError("validation", "insufficient_evidence")
+    if primary:
+        calls.append(ToolCallRecord(tool_name="bls_discover", args={}))
+        for release in _within_deadline(ctx, discover_bls_releases):
+            calls.append(ToolCallRecord(tool_name="bls_read_release", args={"url": release.url}))
+            snapshots.append(_within_deadline(ctx, read_bls_release, release))
+        _require_time(ctx)
     return snapshots
 
 
@@ -331,7 +354,7 @@ def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, sess
 
     def work(ctx: claude_cli.ClaudeCliContext) -> CalmDownDossier:
         plan = ctx.call(_plan_prompt(fear), QueryPlan, settings.claude_plan_output_tokens)
-        snapshots = _retrieve(plan, ctx, session, calls)
+        snapshots = _retrieve(plan, ctx, session, calls, fear)
         return ctx.call(_synthesis_prompt(fear, snapshots), CalmDownDossier, settings.claude_synthesis_output_tokens)
 
     record = claude_cli.run_with_record(
@@ -377,6 +400,7 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
         report = verify_dossier(dossier, session.read_sources(), None, unreviewed)
     if session.errors:
         report.problems.extend(f"retrieval error (non-fatal): {e}" for e in session.errors)
+    report.problems.extend(f"retrieval limitation: {n}" for n in session.notes)
 
     if dossier is not None:
         bundle = {"format": BUNDLE_FORMAT, "fear": fear, "mode": mode, "run_meta": meta,

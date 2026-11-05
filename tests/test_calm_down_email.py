@@ -362,6 +362,34 @@ def test_stale_changed_or_escaping_artifacts_prevent_claim(host, tmp_path, what)
     assert state(host, eid) == "invalid"  # and nothing was handed out: claim raised before returning
 
 
+def test_revocation_after_ready_prevents_claim_and_hands_out_nothing(host):
+    eid = run_ok(host)["execution_id"]
+    (host.root / "state" / "ALLOWANCE").unlink()
+    with pytest.raises(runner.Refusal) as exc:
+        runner.claim_delivery(host.cfg(), eid)
+    refused(exc, "allowance_not_active")
+    assert state(host, eid) == "ready"  # no claim was persisted; restoring the allowance re-enables it
+    (host.root / "state" / "ALLOWANCE").write_text("active")
+    assert runner.claim_delivery(host.cfg(), eid)["execution_id"] == eid
+
+
+@pytest.mark.parametrize("change", ["source_text", "dossier", "digest_mismatch"])
+def test_changed_bundle_contents_prevent_claim(host, change):
+    eid = run_ok(host)["execution_id"]
+    path = host.root / "executions" / eid / "bundle.json"
+    bundle = json.loads(path.read_text())
+    if change == "dossier":
+        bundle["dossier"] = {"status": "insufficient"}  # metadata the older checks look at is untouched
+    elif change == "source_text":
+        bundle["sources"] = [{"backend": "openalex", "read": True, "text": "swapped", "text_sha256": "0" * 64}]
+    else:
+        bundle["sources"][0].update(read=True, text="x", text_sha256=hashlib.sha256(b"y").hexdigest())
+    path.write_text(json.dumps(bundle))
+    with pytest.raises(runner.Refusal):
+        runner.claim_delivery(host.cfg(), eid)
+    assert state(host, eid) == "invalid"
+
+
 @pytest.mark.parametrize("bad", ["../x", "..", "a" * 31, "A" * 32, "x" * 32, "", "../../etc/passwd"])
 def test_execution_id_path_traversal_is_refused(host, bad):
     for call in (runner.claim_delivery, lambda c, e: runner.acknowledge(c, e, "sent")):

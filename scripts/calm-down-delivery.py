@@ -316,8 +316,9 @@ def validate_artifacts(cfg: Config, eid: str, summary: dict | None = None) -> di
             raise Refusal("artifact_path_escape")
         if _json(_read_private(dirfd, "execution.json")).get("execution_id") != eid:
             raise Refusal("artifact_wrong_execution")
-        report = _json(_read_private(dirfd, "mechanical-report.json"))
-        bundle = _json(_read_private(dirfd, "bundle.json"))
+        report_bytes = _read_private(dirfd, "mechanical-report.json")
+        bundle_bytes = _read_private(dirfd, "bundle.json")
+        report, bundle = _json(report_bytes), _json(bundle_bytes)
         html_bytes = _read_private(dirfd, "email.html")
         text_bytes = _read_private(dirfd, "email.txt")
     finally:
@@ -338,6 +339,10 @@ def validate_artifacts(cfg: Config, eid: str, summary: dict | None = None) -> di
     )
     if not all(checks):
         raise Refusal("artifact_not_deliverable")
+    for src in bundle["sources"]:  # bundle integrity: every read source text still matches its recorded digest
+        if src.get("read") and (not isinstance(src.get("text"), str)
+                                or src.get("text_sha256") != hashlib.sha256(src["text"].encode()).hexdigest()):
+            raise Refusal("artifact_changed")
     html_sha, text_sha = hashlib.sha256(html_bytes).hexdigest(), hashlib.sha256(text_bytes).hexdigest()
     if report.get("email_html_sha256") != html_sha or report.get("email_txt_sha256") != text_sha:
         raise Refusal("artifact_changed")
@@ -354,8 +359,12 @@ def validate_artifacts(cfg: Config, eid: str, summary: dict | None = None) -> di
             and summary.get("run_status") == "succeeded" and summary.get("retrieval") == "live"
             and summary.get("problems") == [] and summary.get("pending_review") == []):
         raise Refusal("summary_mismatch")
-    return {"run_id": run_id, "html_sha256": html_sha, "text_sha256": text_sha, "html": html}
+    return {"run_id": run_id, "html_sha256": html_sha, "text_sha256": text_sha, "html": html,
+            "bundle_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
+            "report_sha256": hashlib.sha256(report_bytes).hexdigest()}
 
+
+_BOUND = ("run_id", "html_sha256", "text_sha256", "bundle_sha256", "report_sha256")
 
 # ---------------------------------------------------------------- research
 
@@ -409,8 +418,7 @@ def run_research(cfg: Config, fear_b64: str, env: Mapping[str, str], now: dateti
             except Refusal:
                 pass
             raise
-        _transition(cfg, eid, "ready", run_id=facts["run_id"], html_sha256=facts["html_sha256"],
-                    text_sha256=facts["text_sha256"])
+        _transition(cfg, eid, "ready", **{k: facts[k] for k in _BOUND})
         return {"execution_id": eid, "state": "ready"}
 
 
@@ -423,10 +431,11 @@ def claim_delivery(cfg: Config, eid: str, now: datetime | None = None) -> dict:
         data = _load_state(cfg, eid)
         if data["state"] != "ready":
             raise Refusal(f"claim_refused_state_{data['state']}")
+        if not _allowance_active(cfg):  # revocation applies to an already-ready edition too
+            raise Refusal("allowance_not_active")
         try:
             facts = validate_artifacts(cfg, eid)
-            if (facts["run_id"], facts["html_sha256"], facts["text_sha256"]) != (
-                    data.get("run_id"), data.get("html_sha256"), data.get("text_sha256")):
+            if tuple(facts[k] for k in _BOUND) != tuple(data.get(k) for k in _BOUND):
                 raise Refusal("artifact_changed")
         except Refusal as exc:
             data.update(state="invalid", reason=str(exc))

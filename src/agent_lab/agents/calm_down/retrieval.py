@@ -277,20 +277,24 @@ def redact(text: str) -> str:
     return text
 
 
-class _RedactKeyFilter(logging.Filter):
-    """Redact the OpenAlex key from HTTP client log records (httpx logs full request URLs)."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if openalex_key():
-            message = record.getMessage()
-            redacted = redact(message)
-            if redacted != message:
-                record.msg, record.args = redacted, None
-        return True
+_HTTP_LOGGERS = ("httpx", "httpcore")
+_base_record_factory = logging.getLogRecordFactory()
 
 
-for _name in ("httpx", "httpcore"):
-    logging.getLogger(_name).addFilter(_RedactKeyFilter())
+def _redacting_record_factory(*args, **kwargs) -> logging.LogRecord:
+    """Redact the OpenAlex key from every httpx/httpcore log record, including child loggers
+    such as ``httpcore.http11`` (httpx logs request URLs; httpcore logs response headers).
+    A record factory sees records from all child loggers, unlike a filter on the parent."""
+    record = _base_record_factory(*args, **kwargs)
+    if record.name.split(".", 1)[0] in _HTTP_LOGGERS and openalex_key():
+        message = record.getMessage()
+        redacted = redact(message)
+        if redacted != message:
+            record.msg, record.args = redacted, None
+    return record
+
+
+logging.setLogRecordFactory(_redacting_record_factory)
 
 
 def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True, *,

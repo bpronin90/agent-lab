@@ -1196,3 +1196,21 @@ def test_keyed_search_exception_chain_and_logs_are_redacted(monkeypatch, openale
         assert any("HTTP Request" in r.getMessage() for r in caplog.records)  # httpx did log the URL
     assert "test-openalex-key" not in caplog.text
     assert all("test-openalex-key" not in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("name", ["httpx", "httpcore", "httpcore.http11", "httpcore.connection", "httpx._client"])
+def test_http_child_logger_records_are_redacted(monkeypatch, caplog, name):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    keyed = f"https://doi.org/x?api_key={retrieval.quote_plus(OA_KEY)}"
+    caplog.set_level(logging.DEBUG)
+    logging.getLogger(name).debug("receive_response_headers.complete return_value=%r",
+                                  (b"HTTP/1.1", 302, b"Found", [(b"Location", keyed.encode())]))
+    assert caplog.records and "test-openalex-key" not in caplog.text
+    assert "[REDACTED]" in caplog.text
+
+
+def test_unrelated_log_records_are_untouched(monkeypatch, caplog):
+    monkeypatch.setenv("OPENALEX_API_KEY", OA_KEY)
+    caplog.set_level(logging.INFO)
+    logging.getLogger("agent_lab.other").info("value %s", OA_KEY)
+    assert OA_KEY in caplog.text  # only HTTP client loggers are rewritten

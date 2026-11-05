@@ -276,7 +276,11 @@ validates the result. It never sends email.
 - **Attempts.** Before research, one line is appended and fsynced to `state/ledger.jsonl` under a lock: at most
   3 per America/New_York day (23- and 25-hour DST days included), a fourth is refused, and a missing,
   corrupt, torn or unreadable ledger is treated as exhausted. A crash, timeout or failure keeps the
-  reservation. One research run at a time (a busy run lock refuses without reserving). Direct manual CLI
+  reservation. One research run at a time (a busy run lock refuses without reserving). The runner is a Linux
+  child subreaper (refused before reserving if unavailable); on timeout, interruption or normal exit it
+  SIGKILLs and reaps every descendant, including Claude processes in their own sessions, before releasing
+  the run lock. Limit: if the runner itself is SIGKILLed, the research CLI keeps the lock until it exits, but a
+  Claude process orphaned by a simultaneous kill of the CLI is not tracked. Direct manual CLI
   runs must follow the same ledger: run `calm-down-delivery.py reserve` first and stop if it refuses.
 - **Execution directory.** A fresh, exclusively created `0700` directory named by the execution id. Before
   `ready` and again at `claim`, the runner reads fixed file names with `O_NOFOLLOW` and requires: matching

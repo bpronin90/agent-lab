@@ -43,8 +43,14 @@ FAKE_CLI = textwrap.dedent('''\
     out = argv[argv.index("--out") + 1]
     if mode == "crash":
         sys.exit(1)
-    if mode == "hang":
-        time.sleep(60)
+    if mode in ("hang", "orphan_hang", "orphan_exit"):
+        if mode != "hang":  # stand-in for Claude: a grandchild in its own session, without the lock fd
+            import subprocess
+            g = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+            with open(os.environ["FAKE_GRANDCHILD"], "w") as f:
+                f.write(str(g.pid))
+        if mode != "orphan_exit":
+            time.sleep(60)
     banner = "Unreviewed, AI-generated"
     html = "<html><body>" + (banner if mode != "nobanner" else "") + " edition</body></html>"
     text = (banner if mode != "nobanner" else "") + " edition"
@@ -267,6 +273,79 @@ def test_interrupted_runner_kills_its_research_child(host, monkeypatch):
         run_ok(host, FAKE_MODE="hang")
     assert started["proc"].poll() is not None  # reaped and dead, not still running
     monkeypatch.undo()
+
+
+def _alive(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def _wait_for(path: Path) -> int:
+    import time
+    for _ in range(200):
+        if path.exists() and path.read_text():
+            return int(path.read_text())
+        time.sleep(0.05)
+    raise AssertionError("grandchild never started")
+
+
+def test_interrupted_runner_kills_separately_sessioned_grandchild_before_unlocking(host, monkeypatch, tmp_path):
+    marker = tmp_path / "grandchild.pid"
+    host.env["FAKE_GRANDCHILD"] = str(marker)
+    real = subprocess.Popen
+    real_communicate = real.communicate
+    seen = {}
+
+    def interrupted(self, timeout=None):
+        seen["gpid"] = _wait_for(marker)
+        assert _alive(seen["gpid"])
+        raise KeyboardInterrupt
+
+    real_kill = runner._kill_descendants
+
+    def checking_kill():
+        real_kill()
+        # still inside the run lock: a second run must be refused while the cleanup finishes
+        with pytest.raises(runner.Refusal) as busy:
+            with runner._lock(host.root / "state" / "run.lock", blocking=False):
+                pass
+        seen["busy"] = str(busy.value)
+
+    monkeypatch.setattr(real, "communicate", interrupted)
+    monkeypatch.setattr(runner, "_kill_descendants", checking_kill)
+    with pytest.raises(KeyboardInterrupt):
+        run_ok(host, FAKE_MODE="orphan_hang")
+    monkeypatch.setattr(real, "communicate", real_communicate)
+    assert not _alive(seen["gpid"])
+    assert seen["busy"] == "another_run_in_progress"
+
+
+def test_grandchild_left_behind_by_a_finished_cli_is_killed(host, tmp_path):
+    marker = tmp_path / "grandchild.pid"
+    host.env["FAKE_GRANDCHILD"] = str(marker)
+    assert run_ok(host, FAKE_MODE="orphan_exit")["state"] == "ready"  # CLI exits, grandchild still sleeping
+    assert not _alive(int(marker.read_text()))
+
+
+def test_unconfirmed_descendant_death_refuses(monkeypatch):
+    monkeypatch.setattr(runner, "REAP_DEADLINE_SECONDS", 0.0)
+    monkeypatch.setattr(runner, "_descendants", lambda pid: [2 ** 22 + 7])  # never disappears
+    with pytest.raises(runner.Refusal) as exc:
+        runner._kill_descendants()
+    assert str(exc.value) == "research_descendants_survived"
+
+
+def test_missing_subreaper_support_refuses_before_reservation(host, monkeypatch):
+    def unavailable():
+        raise runner.Refusal("subreaper_unavailable")
+    monkeypatch.setattr(runner, "_become_subreaper", unavailable)
+    with pytest.raises(runner.Refusal) as exc:
+        run_ok(host)
+    assert str(exc.value) == "subreaper_unavailable"
+    assert not (host.root / "state" / "ledger.jsonl").read_text().strip()
 
 
 def test_research_child_inherits_the_run_lock(host, monkeypatch):

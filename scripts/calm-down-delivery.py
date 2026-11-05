@@ -37,6 +37,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 import unicodedata
 import uuid
 from contextlib import contextmanager
@@ -375,6 +376,67 @@ def _cli_env(env: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
+PR_SET_CHILD_SUBREAPER = 36
+REAP_DEADLINE_SECONDS = 10.0
+
+
+def _become_subreaper() -> None:
+    """Make orphaned descendants (for example a Claude process the research CLI started in its own session)
+    reparent to this runner instead of init, so they stay findable and killable until confirmed dead."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl")
+    except (OSError, AttributeError):
+        raise Refusal("subreaper_unavailable") from None
+
+
+def _descendants(root_pid: int) -> list[int]:
+    """Every live process below root_pid, by parent links in /proc (sessions and process groups ignored)."""
+    children: dict[int, list[int]] = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as f:
+                stat_line = f.read().decode("ascii", "replace")
+        except OSError:
+            continue  # exited meanwhile
+        fields = stat_line[stat_line.rfind(")") + 2:].split()
+        children.setdefault(int(fields[1]), []).append(int(entry))
+    found, todo = [], [root_pid]
+    while todo:
+        for pid in children.get(todo.pop(), []):
+            found.append(pid)
+            todo.append(pid)
+    return found
+
+
+def _kill_descendants() -> None:
+    """SIGKILL and reap every descendant of this runner until none remain. Refuses (keeping the caller's
+    lock held until it unwinds) if they cannot be confirmed dead within a bounded deadline."""
+    me = os.getpid()
+    deadline = time.monotonic() + REAP_DEADLINE_SECONDS
+    while True:
+        pids = _descendants(me)
+        if not pids:
+            return
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        for pid in pids:  # reparented orphans and zombies are now our children
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+        if time.monotonic() > deadline:
+            raise Refusal("research_descendants_survived")
+        time.sleep(0.05)
+
+
 def _launch_cli(fear: str, out_dir: Path, cwd: Path, env: Mapping[str, str],
                 lock_fd: int | None = None) -> tuple[int, str]:
     # Argument array, shell=False, fixed executable/subcommand, application-generated output path.
@@ -387,27 +449,31 @@ def _launch_cli(fear: str, out_dir: Path, cwd: Path, env: Mapping[str, str],
                             pass_fds=(lock_fd,) if lock_fd is not None else ())
 
     def kill() -> None:
+        # Kill the CLI and its whole tree, including descendants in other sessions (Claude), and reap them,
+        # before the caller releases the run lock.
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
             pass
+        proc.wait()
+        _kill_descendants()
 
     try:
         stdout, _ = proc.communicate(timeout=RESEARCH_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         kill()
-        proc.communicate()
         raise Refusal("research_timeout") from None
     except BaseException:  # interrupted or terminated runner: never leave research running unserialized
         kill()
-        proc.wait()
         raise
+    _kill_descendants()  # anything the CLI left behind dies before the lock is released
     return proc.returncode, stdout.decode("utf-8", "replace")
 
 
 def run_research(cfg: Config, fear_b64: str, env: Mapping[str, str], now: datetime | None = None) -> dict:
     fear = decode_fear(fear_b64)
     with _lock(cfg.state / "run.lock", blocking=False) as run_lock:  # one run at a time, before any reservation
+        _become_subreaper()  # before reserving: refusal here starts nothing and consumes nothing
         eid = reserve_attempt(cfg, now)  # a crash from here on keeps the reservation
         try:
             exec_dir = cfg.executions / eid

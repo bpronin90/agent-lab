@@ -66,7 +66,28 @@ Research rules (strict, mechanically verified after you answer):
 1. You have no tools. The only evidence is in the UNTRUSTED SOURCE TEXT blocks below, each headed by
    its source_id. They were retrieved by the application, not chosen by you.
 2. Cite only source_ids that appear in those blocks, and quote only from the cited block's text.
-""" + INSTRUCTIONS[INSTRUCTIONS.index("3. evidence_quote"):]
+""" + INSTRUCTIONS[INSTRUCTIONS.index("3. evidence_quote"):] + """
+FINAL SELF-CHECK. Before you output, compare every claim, caveat and analogy against that finding's OWN
+evidence_quote, one finding at a time. These checks are mechanical, so apply them literally:
+a. Numbers. A year is a number. A caveat or analogy may not contain a year (or any figure) unless the
+   same finding's evidence_quote contains it, even if the year appears in source metadata or elsewhere
+   in the source text. Example: a caveat that says a study is from the year 2023 or the year 2020 fails
+   when that finding's quote does not contain that year. Omit the year (write "the study", "recent
+   data"), or choose a different contiguous, verbatim quote that really contains it. Never alter,
+   trim to fit, or stitch quotations together to satisfy this check.
+b. Negation. The claim and the quote must agree on negation: both contain a negation word (no, not,
+   none, never, nothing, neither, nor, cannot, n't, fail to) or neither does. This includes "not
+   merely": a quote saying a tool is "not merely" a helper counts as negated, so an affirmative claim
+   paired with it fails. Choose a claim and quote pair that faithfully agree, or omit the finding. Do
+   not add or drop a negation to pass the check, and never reverse the source's meaning.
+c. Support. A claim may say only what its selected excerpt supports. If the excerpt does not mention
+   something (for example court sanctions), leave it out of the claim. Pick a faithful claim and quote
+   pair, or omit the finding.
+d. Consistency. If you omit or revise a finding, update doomers_get_right, reasons_to_chill and every
+   advice finding_ids list so they reference only findings you kept. If you cannot supply adequate
+   balanced evidence after omissions, set status="insufficient" and say so in limitations instead of
+   inventing support.
+"""
 
 
 def build_calm_down_agent(model: Model) -> Agent[None, CalmDownDossier]:

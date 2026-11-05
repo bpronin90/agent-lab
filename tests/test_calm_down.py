@@ -1702,11 +1702,26 @@ def _two_pass(monkeypatch, recent, relevance, fail=None, fail_pass=None):
                 return httpx.Response(302, headers={"location": f"https://doi.org/x?{request.url.query.decode()}"})
             return httpx.Response(200, content={"json": b"{not json", "shape": b'{"results": {"a": 1}}',
                                                 "noid": b'{"results": [{"display_name": "x"}]}',
-                                                "noresults": b"{}", "list": b"[]"}[fail])
+                                                "noresults": b"{}", "list": b"[]",
+                                                **{name: json.dumps({"results": [dict(_work("W1"), **bad)]}).encode()
+                                                   for name, bad in NESTED_MALFORMED.items()}}[fail])
         return httpx.Response(200, json={"results": recent if is_recent else relevance})
 
     monkeypatch.setattr(retrieval, "_client", lambda: _mock_client(handler))
     return seen
+
+
+NESTED_MALFORMED = {
+    "location": {"primary_location": "invalid"},
+    "source": {"primary_location": {"source": ["x"]}},
+    "venue": {"primary_location": {"source": {"display_name": 7}}},
+    "landing": {"primary_location": {"landing_page_url": {"u": 1}}},
+    "year": {"publication_year": "2025"},
+    "title": {"display_name": ["t"]},
+    "doi": {"doi": 1},
+    "abstract": {"abstract_inverted_index": ["a"]},
+    "positions": {"abstract_inverted_index": {"a": "0"}},
+}
 
 
 def _openalex_urls(seen):
@@ -1787,7 +1802,8 @@ def test_claude_two_read_selection_includes_the_recent_pass(tmp_path, fake_claud
     assert reads[:2] == ["OAR0", "OAV0"]  # one from each pass survives truncation and the two-read limit
 
 
-@pytest.mark.parametrize("fail", ["http", "timeout", "json", "shape", "noid", "noresults", "list", "redirect"])
+@pytest.mark.parametrize("fail", ["http", "timeout", "json", "shape", "noid", "noresults", "list", "redirect",
+                                  *NESTED_MALFORMED])
 @pytest.mark.parametrize("fail_pass", ["relevance", "recent"])
 @pytest.mark.parametrize("key", [None, OA_KEY])
 def test_failed_pass_ends_the_search_without_retry(monkeypatch, fail, fail_pass, key):

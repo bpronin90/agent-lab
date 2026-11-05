@@ -409,9 +409,33 @@ def _openalex_works(session: ResearchSession, url: str) -> list[dict]:
         works = json.loads(body)["results"]
     except (ValueError, AttributeError, KeyError, TypeError):
         works = None
-    if not isinstance(works, list) or not all(isinstance(w, dict) and isinstance(w.get("id"), str) for w in works):
+    if not isinstance(works, list) or not all(_valid_work(w) for w in works):
         raise RetrievalError("malformed OpenAlex response")
     return works[:MAX_RESULTS_PER_SEARCH]
+
+
+def _optional(value: object, kind: type) -> bool:
+    return value is None or (isinstance(value, kind) and not isinstance(value, bool))
+
+
+def _valid_work(work: object) -> bool:
+    """Every field the search consumes has the expected shape, checked before the result is accepted."""
+    if not isinstance(work, dict) or not isinstance(work.get("id"), str):
+        return False
+    location = work.get("primary_location")
+    source = location.get("source") if isinstance(location, dict) else None
+    inverted = work.get("abstract_inverted_index")
+    return (all(_optional(work.get(k), str) for k in ("display_name", "doi"))
+            and _optional(work.get("publication_year"), int)
+            and _optional(location, dict)
+            and (not isinstance(location, dict) or _optional(location.get("landing_page_url"), str))
+            and _optional(source, dict)
+            and (not isinstance(source, dict) or _optional(source.get("display_name"), str))
+            and _optional(inverted, dict)
+            and (not isinstance(inverted, dict) or all(
+                isinstance(word, str) and isinstance(poses, list)
+                and all(isinstance(p, int) and not isinstance(p, bool) for p in poses)
+                for word, poses in inverted.items())))
 
 
 def merge_candidates(recent: list[dict], relevance: list[dict]) -> list[dict]:

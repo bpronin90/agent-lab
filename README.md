@@ -11,7 +11,9 @@ also a hands-on way to learn Docker and Kubernetes.
   Calm Down research alone can also run manually through the Claude CLI on an existing
   subscription (`AGENT_LAB_PROVIDER=claude-cli`, two gated launches; live use needs owner
   authorization unless the bounded personal-use allowance in `CONTRIBUTING.md` is activated); see
-  [docs/experiments/calm-down.md](docs/experiments/calm-down.md).
+  [docs/experiments/calm-down.md](docs/experiments/calm-down.md). Only the `calm-down` research command
+  defaults to `claude-cli` (model `claude-sonnet-5-5`); all other commands default to `mock`, and
+  the launch gate `AGENT_LAB_ALLOW_CLAUDE_CLI=1` is never defaulted.
   Calm Down live search can use an optional free OpenAlex key from `OPENALEX_API_KEY` (sent only to
   `api.openalex.org`, never logged).
 - **Demo agent:** three safe tools (`calculate`, `current_time`, `lookup_note`). None of them

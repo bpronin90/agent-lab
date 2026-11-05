@@ -452,3 +452,22 @@ def test_error_envelope_keeps_cache_inclusive_usage_without_retry(fake):
     with pytest.raises(ClaudeCliError):
         c.call("p", Answer)
     assert len(calls(script)) == 1 and c.input_tokens == 1104
+
+
+# --- #35: effort -------------------------------------------------------------------------
+
+def test_effort_argv_and_hash(fake):
+    assert claude_cli.build_argv("claude", "m") == ["claude", *claude_cli.BASE_ARGS, "--model", "m"]
+    assert claude_cli.build_argv("claude", "m", "high")[-2:] == ["--effort", "high"]
+    script = fake()
+    c = ctx(script, effort="max")
+    c.call("p", Answer)
+    assert calls(script)[0]["argv"][-2:] == ["--effort", "max"]
+    assert claude_cli.config_hash(ctx(script), "i") != claude_cli.config_hash(c, "i")
+    assert claude_cli.config_hash(ctx(script, effort="low"), "i") != claude_cli.config_hash(c, "i")
+
+
+def test_invalid_effort_fails_before_any_launch(fake):
+    with pytest.raises(ClaudeCliError) as e:
+        ctx(fake(), effort="turbo")
+    assert (e.value.error_class, e.value.code) == ("config", "invalid_effort")

@@ -1,5 +1,6 @@
 """Offline tests for the Calm Down agent. They validate the pipeline, not live research."""
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -216,7 +217,14 @@ def test_malformed_model_reply_fails_closed(tmp_path, monkeypatch):
     assert (tmp_path / "LIMITATION.md").exists()
 
 
+@pytest.fixture(autouse=True)
+def _no_checkout_env_file(monkeypatch):
+    """Never read a developer's real .env.live during tests."""
+    monkeypatch.setattr(pipeline, "live_env_path", lambda: None)
+
+
 def test_cli_calm_down_exit_codes(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LAB_PROVIDER", "mock")
     monkeypatch.setenv("AGENT_LAB_RUN_LOG_DIR", str(tmp_path / "runs"))
     assert main(["calm-down", FEAR, "--out", str(tmp_path / "ok")]) == 5  # research stops at human review
     assert not (tmp_path / "ok" / "email.html").exists()
@@ -1380,3 +1388,170 @@ def test_changed_verdict_with_disclaimer_still_needs_fresh_human_approval():
     report = verify_mutated(lambda d: d.update(verdict=_SAVED_VERDICT))
     assert not _guarantee_problems(report)
     assert report.status == "needs_review" and "editorial" in report.pending_review
+
+
+# ---------------------------------------------------------------- #35 configuration convenience
+
+def test_research_command_defaults_to_claude_but_general_defaults_stay_mock():
+    env = pipeline.resolve_research_env({})
+    s = Settings.from_env(env)
+    assert (s.provider, s.claude_model) == ("claude-cli", "claude-sonnet-5-5")
+    assert "AGENT_LAB_ALLOW_CLAUDE_CLI" not in env  # defaulting a provider never opens the gate
+    base = Settings.from_env({})
+    assert (base.provider, base.claude_model) == ("mock", None)
+    assert pipeline.resolve_research_env({"AGENT_LAB_PROVIDER": "mock"})["AGENT_LAB_PROVIDER"] == "mock"
+
+
+def test_env_file_precedence_process_over_file_over_defaults(tmp_path):
+    f = tmp_path / ".env.live"
+    f.write_text("AGENT_LAB_CLAUDE_MODEL=file-model\nAGENT_LAB_CLAUDE_EFFORT=high\nAGENT_LAB_PROVIDER=mock\n")
+    env = pipeline.resolve_research_env({"AGENT_LAB_CLAUDE_EFFORT": ""}, f)
+    assert env["AGENT_LAB_CLAUDE_MODEL"] == "file-model"  # file beats command default
+    assert env["AGENT_LAB_PROVIDER"] == "mock"
+    assert env["AGENT_LAB_CLAUDE_EFFORT"] == ""  # explicitly empty process value wins
+    assert Settings.from_env(env).claude_effort is None
+    assert pipeline.resolve_research_env({"AGENT_LAB_CLAUDE_MODEL": "proc"}, f)["AGENT_LAB_CLAUDE_MODEL"] == "proc"
+
+
+def test_env_file_cannot_supply_gate_markers_but_process_markers_stay_even_empty(tmp_path):
+    f = tmp_path / ".env.live"
+    f.write_text("CI=true\nAGENT_LAB_ALLOW_CLAUDE_CLI=1\n")
+    env = pipeline.resolve_research_env({}, f)
+    assert "CI" not in env and env["AGENT_LAB_ALLOW_CLAUDE_CLI"] == "1"
+    env = pipeline.resolve_research_env({"CI": "", "KUBERNETES_SERVICE_HOST": ""}, f)
+    assert "CI" in env and "KUBERNETES_SERVICE_HOST" in env
+    with pytest.raises(claude_cli.ClaudeCliError) as e:
+        claude_cli.check_launch_gate(env)
+    assert e.value.code == "gate_refused_ci"
+
+
+def test_resolution_does_not_leak_into_process_environment(tmp_path, monkeypatch):
+    f = tmp_path / ".env.live"
+    f.write_text("AGENT_LAB_CLAUDE_EFFORT=max\n")
+    monkeypatch.delenv("AGENT_LAB_CLAUDE_EFFORT", raising=False)
+    monkeypatch.delenv("AGENT_LAB_PROVIDER", raising=False)
+    pipeline.resolve_research_env(env_file=f)
+    assert "AGENT_LAB_CLAUDE_EFFORT" not in os.environ and "AGENT_LAB_PROVIDER" not in os.environ
+
+
+def test_live_env_path_is_checkout_root_only():
+    from agent_lab import config
+    monkeypatch_root = config.checkout_root()
+    assert monkeypatch_root is not None and (monkeypatch_root / "pyproject.toml").is_file()
+    assert config.live_env_path() == monkeypatch_root / ".env.live"
+
+
+def test_cli_finalize_loads_no_live_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_LAB_PROVIDER", "mock")
+    out = tmp_path / "ok"
+    assert main(["calm-down", FEAR, "--out", str(out)]) == 5
+    def boom(*a, **k):
+        raise AssertionError("live configuration loaded")
+    monkeypatch.setattr(pipeline, "live_env_path", boom)
+    monkeypatch.setattr(pipeline, "resolve_research_env", boom)
+    monkeypatch.setenv("AGENT_LAB_PROVIDER", "bogus")  # would fail Settings.from_env
+    monkeypatch.setenv("AGENT_LAB_CLAUDE_EFFORT", "bogus")
+    assert main(["calm-down-finalize", str(out), "--review", "fixture"]) == 0
+
+
+def test_cli_malformed_env_file_is_config_error_without_values(tmp_path, monkeypatch, capsys):
+    f = tmp_path / ".env.live"
+    f.write_text("AGENT_LAB_CLAUDE_MODEL=ok\nthis is not valid " + SECRET + "\n")
+    monkeypatch.setattr(pipeline, "live_env_path", lambda: f)
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "o")]) == 2
+    err = capsys.readouterr().err
+    assert "line 2" in err and SECRET not in err and not (tmp_path / "o").exists()
+
+
+def test_cli_uses_file_config_and_gate_still_required(tmp_path, monkeypatch, fake_claude):
+    launches = fake_claude()
+    f = tmp_path / ".env.live"
+    f.write_text("AGENT_LAB_CLAUDE_EFFORT=high\nAGENT_LAB_CLAUDE_PLAN_OUTPUT_TOKENS=700\n")
+    monkeypatch.setattr(pipeline, "live_env_path", lambda: f)
+    monkeypatch.delenv("AGENT_LAB_PROVIDER", raising=False)
+    monkeypatch.delenv("AGENT_LAB_CLAUDE_MODEL", raising=False)
+    monkeypatch.setenv("AGENT_LAB_RUN_LOG_DIR", str(tmp_path / "runs"))
+    # Gate closed: nothing launches even though claude-cli is the command default.
+    monkeypatch.delenv("AGENT_LAB_ALLOW_CLAUDE_CLI")
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "a")]) == 2
+    assert launches() == []
+    # Operator opt-in lives in the file: it is honored, effort reaches argv, bounds come from the file.
+    f.write_text(f.read_text() + "AGENT_LAB_ALLOW_CLAUDE_CLI=1\n")
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "b")]) in (0, 5)
+    seen = launches()
+    assert len(seen) == 2
+    for call in seen:
+        argv = call["argv"]
+        assert argv[argv.index("--effort") + 1] == "high"
+        assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+    assert "AGENT_LAB_CLAUDE_EFFORT" not in os.environ
+
+
+def test_effort_unset_omits_argument_and_invalid_fails_before_launch(tmp_path, fake_claude):
+    launches = fake_claude()
+    run_calm_down(FEAR, claude_settings(), "fixture", tmp_path / "a")
+    assert all("--effort" not in c["argv"] for c in launches())
+    with pytest.raises(ValueError) as e:
+        Settings.from_env({"AGENT_LAB_CLAUDE_EFFORT": "turbo" + SECRET})
+    assert SECRET not in str(e.value)
+    s = dataclasses.replace(claude_settings(), claude_effort="turbo")
+    result = run_calm_down(FEAR, s, "fixture", tmp_path / "b")
+    assert result.record.error_class == "config" and "invalid_effort" in result.record.error
+    assert len(launches()) == 2  # no new launches from the invalid run
+
+
+def test_effort_changes_claude_config_hash_only(tmp_path, fake_claude):
+    fake_claude()
+    hashes = {}
+    for effort in ("", "low", "high"):
+        r = run_calm_down(FEAR, claude_settings(AGENT_LAB_CLAUDE_EFFORT=effort), "fixture", tmp_path / (effort or "none"))
+        hashes[effort] = r.record.config_hash
+    assert len(set(hashes.values())) == 3
+    assert Settings.from_env({"AGENT_LAB_CLAUDE_EFFORT": "high"}).public_dict() == Settings.from_env({}).public_dict()
+
+
+def test_unsupported_effort_flag_is_final_with_no_retry(tmp_path, fake_claude, monkeypatch):
+    launches = fake_claude(plan=json.dumps({"type": "result", "subtype": "error", "is_error": True,
+                                            "result": "error: unknown option '--effort'"}).encode(), plan_code=1)
+    result = run_calm_down(FEAR, claude_settings(AGENT_LAB_CLAUDE_EFFORT="high"), "fixture", tmp_path)
+    assert result.record.error_class == "config" and "unsupported_flag" in result.record.error
+    assert len(launches()) == 1
+
+
+def test_synthesis_allowance_defaults_to_20000_output_tokens(tmp_path, fake_claude, monkeypatch):
+    s = claude_settings()
+    assert (s.claude_plan_output_tokens, s.claude_synthesis_output_tokens) == (1000, 20000)
+    monkeypatch.setattr(sys.modules[__name__], "envelope", _env_with_synthesis_tokens(20000))
+    fake_claude()
+    ok = run_calm_down(FEAR, s, "fixture", tmp_path / "ok").record
+    assert ok.status == "succeeded" and ok.output_tokens == 20 + 20000
+
+
+def test_synthesis_20001_output_tokens_is_limit_with_partial_accounting(tmp_path, fake_claude, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "envelope", _env_with_synthesis_tokens(20001))
+    fake_claude()
+    r = run_calm_down(FEAR, claude_settings(), "fixture", tmp_path).record
+    assert r.status == "failed" and r.error_class == "limit" and "output_tokens_exceeded" in r.error
+    assert r.requests == 2 and r.output_tokens == 20 + 20001
+
+
+def _env_with_synthesis_tokens(tokens):
+    real = envelope
+    return lambda result, usage=(50, 20): real(result, (900, tokens) if usage == (900, 300) else usage)
+
+
+@pytest.mark.parametrize("line", [
+    "AGENT_LAB_DEADLINE_SECONDS=private-token-example", "AGENT_LAB_MAX_REQUESTS=-private-token-example",
+    "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS=private-token-example", "AGENT_LAB_MIN_REQUEST_INTERVAL_SECONDS=9999",
+    "AGENT_LAB_PROVIDER=private-token-example", "AGENT_LAB_CLAUDE_EFFORT=private-token-example",
+    "AGENT_LAB_CALM_DOWN_RETRIEVAL=private-token-example", "AGENT_LAB_MAX_REQUESTS=0"])
+def test_cli_invalid_file_values_never_echoed(tmp_path, monkeypatch, capsys, line):
+    f = tmp_path / ".env.live"
+    f.write_text(line + "\n")
+    monkeypatch.setattr(pipeline, "live_env_path", lambda: f)
+    for name in ("AGENT_LAB_PROVIDER", "AGENT_LAB_CALM_DOWN_RETRIEVAL"):
+        monkeypatch.delenv(name, raising=False)
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "o")]) == 2
+    err = capsys.readouterr().err
+    assert "config" in err or "error" in err
+    assert "private-token-example" not in err and "9999" not in err

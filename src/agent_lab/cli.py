@@ -30,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("healthcheck", help="Validate settings without calling any model.")
     args = parser.parse_args(argv)
 
+    if args.command == "calm-down-finalize":
+        return _calm_down_finalize(args)  # offline: loads no live configuration or settings
+    if args.command == "calm-down":
+        return _calm_down(args)
+
     try:
         settings = Settings.from_env()
     except ValueError as exc:
@@ -39,11 +44,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "healthcheck":
         print(json.dumps({"status": "ok", "provider": settings.provider, "agents": sorted(REGISTRY)}))
         return 0
-
-    if args.command == "calm-down":
-        return _calm_down(args, settings)
-    if args.command == "calm-down-finalize":
-        return _calm_down_finalize(args)
 
     try:
         record = run_agent(args.prompt, settings, args.agent)
@@ -72,15 +72,22 @@ def _research_exit(result) -> int:
     return 5 if result.report and result.report.status == "needs_review" else 4
 
 
-def _calm_down(args, settings: Settings) -> int:
+def _calm_down(args) -> int:
     from pathlib import Path
 
-    from agent_lab.agents.calm_down.pipeline import research_settings, run_calm_down
+    from agent_lab.agents.calm_down.pipeline import research_settings, resolve_research_env, run_calm_down
     from agent_lab.agents.calm_down.retrieval import mode_from_env
 
     try:
-        mode = mode_from_env()
-        result = run_calm_down(args.fear, research_settings(settings), mode, Path(args.out))
+        # Resolved once, before settings, overrides, retrieval mode and the launch gate; passed
+        # explicitly (never exported to os.environ) so it cannot leak into later commands.
+        env = resolve_research_env()
+        settings = Settings.from_env(env)
+        try:
+            mode = mode_from_env(env)
+        except ValueError:  # the library message echoes the value, which may come from .env.live
+            raise ValueError("AGENT_LAB_CALM_DOWN_RETRIEVAL must be fixture or live") from None
+        result = run_calm_down(args.fear, research_settings(settings, env), mode, Path(args.out), env)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -36,6 +36,7 @@ from typing import Callable, Mapping, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from agent_lab.config import CLAUDE_EFFORTS
 from agent_lab.schemas import AttemptRecord, ErrorClass, RunRecord
 
 PROVIDER = "claude-cli"
@@ -100,8 +101,11 @@ def check_launch_gate(env: Mapping[str, str]) -> None:
         raise ClaudeCliError("config", "gate_not_enabled")
 
 
-def build_argv(binary: str, model: str) -> list[str]:
-    return [binary, *BASE_ARGS, "--model", model]
+def build_argv(binary: str, model: str, effort: str | None = None) -> list[str]:
+    argv = [binary, *BASE_ARGS, "--model", model]
+    if effort is not None:
+        argv += ["--effort", effort]
+    return argv
 
 
 def build_env(env: Mapping[str, str]) -> dict[str, str]:
@@ -120,6 +124,7 @@ class ClaudeCliContext:
     max_stderr_bytes: int = 64_000
     binary: str = "claude"
     env: Mapping[str, str] | None = None  # defaults to os.environ at launch
+    effort: str | None = None  # `--effort <level>`; None omits the argument
     requests: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -128,6 +133,8 @@ class ClaudeCliContext:
     def __post_init__(self) -> None:
         if not self.model:
             raise ClaudeCliError("config", "model_required")
+        if self.effort is not None and self.effort not in CLAUDE_EFFORTS:
+            raise ClaudeCliError("config", "invalid_effort")
 
     @property
     def usage_complete(self) -> bool:
@@ -169,7 +176,7 @@ class ClaudeCliContext:
         try:
             try:
                 proc = subprocess.Popen(
-                    build_argv(self.binary, self.model),
+                    build_argv(self.binary, self.model, self.effort),
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     cwd=workdir, env=build_env(env), shell=False, start_new_session=True,
                 )
@@ -347,6 +354,7 @@ def config_hash(ctx: ClaudeCliContext, instructions: str) -> str:
     payload = {
         "provider": PROVIDER,
         "model": ctx.model,
+        "effort": ctx.effort,
         "max_requests": ctx.max_requests,
         "max_output_tokens": ctx.max_output_tokens,
         "max_stdout_bytes": ctx.max_stdout_bytes,

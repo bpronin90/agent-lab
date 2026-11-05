@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
+from typing import Mapping
 
 from typing import Literal
 
@@ -42,7 +43,7 @@ from agent_lab.agents.calm_down.retrieval import (
 )
 from agent_lab.agents.calm_down.schemas import CalmDownDossier
 from agent_lab.agents.calm_down.verify import VerificationReport, review_request, verify_dossier
-from agent_lab.config import Settings
+from agent_lab.config import CLAUDE_EFFORTS, Settings, live_env_path, load_env_file
 from agent_lab.runtime import run_agent
 from agent_lab.schemas import RunRecord, ToolCallRecord
 
@@ -92,6 +93,26 @@ class QueryPlan(BaseModel):
         if len({q.query.strip().lower() for q in self.queries}) != len(self.queries):
             raise ValueError("queries must be distinct")
         return self
+
+
+# Command-level defaults for `agent-lab calm-down` only. They sit below the checkout's `.env.live`
+# and the process environment, and never enable the launch gate (AGENT_LAB_ALLOW_CLAUDE_CLI).
+RESEARCH_COMMAND_DEFAULTS = {"AGENT_LAB_PROVIDER": "claude-cli", "AGENT_LAB_CLAUDE_MODEL": "claude-sonnet-5-5"}
+
+
+def resolve_research_env(process_env: Mapping[str, str] | None = None,
+                         env_file: Path | None | str = "default") -> dict[str, str]:
+    """The one configuration a research run uses: process environment (even empty values) over the
+    checkout-root `.env.live` over command defaults. Returns a new dict; nothing is exported to
+    os.environ, so no later command in the process sees it. CI and KUBERNETES_SERVICE_HOST count
+    only when set in the process environment, never from the file."""
+    process = dict(os.environ if process_env is None else process_env)
+    path = live_env_path() if env_file == "default" else env_file
+    merged = {**RESEARCH_COMMAND_DEFAULTS, **load_env_file(path), **process}
+    for marker in claude_cli.REFUSE_IF_PRESENT:
+        if marker not in process:
+            merged.pop(marker, None)
+    return merged
 
 
 def research_settings(settings: Settings, env: dict[str, str] | None = None) -> Settings:
@@ -175,6 +196,7 @@ def _claude_policy(settings: Settings, mode: RetrievalMode) -> str:
     """Everything that shapes a Claude CLI run besides the context bounds, for its config_hash."""
     return json.dumps({
         "plan_instructions": PLAN_INSTRUCTIONS, "synthesis_instructions": SYNTHESIS_INSTRUCTIONS,
+        "effort": settings.claude_effort,
         "plan_output_tokens": settings.claude_plan_output_tokens,
         "synthesis_output_tokens": settings.claude_synthesis_output_tokens,
         "launches": CLAUDE_LAUNCHES, "max_queries": CLAUDE_MAX_QUERIES, "reads_per_query": CLAUDE_READS_PER_QUERY,
@@ -263,22 +285,27 @@ def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: Resear
     return snapshots
 
 
-def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, session: ResearchSession) -> RunRecord:
+def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, session: ResearchSession,
+                        env: Mapping[str, str] | None = None) -> RunRecord:
     """Plan, retrieve, synthesize: exactly two CLI launches on success, one shared context."""
+    refusal = None
     if not settings.claude_model:
+        refusal = ("unset", "model_required: set AGENT_LAB_CLAUDE_MODEL explicitly")
+    elif settings.claude_effort is not None and settings.claude_effort not in CLAUDE_EFFORTS:
+        refusal = (settings.claude_model, "invalid_effort")
+    if refusal:
         # Refused before any launch, but still recorded like every other run.
         now = datetime.now(timezone.utc)
         return RunRecord(
-            run_id=str(uuid.uuid4()), agent_name=AGENT_NAME, provider=claude_cli.PROVIDER, model="unset",
+            run_id=str(uuid.uuid4()), agent_name=AGENT_NAME, provider=claude_cli.PROVIDER, model=refusal[0],
             prompt=build_prompt(fear)[:500], status="failed", started_at=now, finished_at=now,
-            error="model_required: set AGENT_LAB_CLAUDE_MODEL explicitly", error_class="config",
-            git_sha=settings.git_sha,
+            error=refusal[1], error_class="config", git_sha=settings.git_sha,
             config_hash=hashlib.sha256(_claude_policy(settings, mode).encode()).hexdigest())
     ctx = claude_cli.ClaudeCliContext(
         model=settings.claude_model, deadline=claude_cli._monotonic() + settings.deadline_seconds,
         max_requests=CLAUDE_LAUNCHES,
         max_output_tokens=max(settings.claude_plan_output_tokens, settings.claude_synthesis_output_tokens),
-        binary=claude_binary,
+        binary=claude_binary, env=env, effort=settings.claude_effort,
     )
     calls: list[ToolCallRecord] = []
 
@@ -293,7 +320,8 @@ def run_claude_research(fear: str, settings: Settings, mode: RetrievalMode, sess
     return record.model_copy(update={"tool_calls": calls, "tools_used": sorted({c.tool_name for c in calls})})
 
 
-def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: Path) -> CalmDownResult:
+def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: Path,
+                  env: Mapping[str, str] | None = None) -> CalmDownResult:
     """Research only. Produces a bundle for review, never an email."""
     if mode == "live" and settings.provider == "mock":
         raise ValueError("live retrieval with the mock provider would mix fixture content with live sources")
@@ -301,7 +329,7 @@ def run_calm_down(fear: str, settings: Settings, mode: RetrievalMode, out_dir: P
     clear_generated(out_dir)
     with research_session(mode) as session:
         if settings.provider == claude_cli.PROVIDER:
-            record = run_claude_research(fear, settings, mode, session)
+            record = run_claude_research(fear, settings, mode, session, env)
         else:
             record = run_agent(build_prompt(fear), settings, AGENT_NAME)
     sources = dict(session.sources)  # one atomic copy: an abandoned retrieval thread may still add entries

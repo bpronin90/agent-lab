@@ -121,11 +121,41 @@ model factory has no Claude implementation, so `agent-lab run` with this provide
 error before any subprocess or network activity. Mock stays the default and Gemini is unchanged.
 
 ```sh
-export AGENT_LAB_PROVIDER=claude-cli AGENT_LAB_CLAUDE_MODEL=<explicit model>   # no default model
 export AGENT_LAB_ALLOW_CLAUDE_CLI=1                                            # per-launch gate
 export AGENT_LAB_CALM_DOWN_RETRIEVAL=live      # or leave unset for the offline fixture corpus
 agent-lab calm-down "AI will replace lawyers and accountants" --out calm-down-claude
 ```
+
+**Command defaults and `.env.live`.** Only `agent-lab calm-down` (research) defaults to provider
+`claude-cli` and requested model `claude-sonnet-5-5`; explicit configuration wins. Every other command,
+and `Settings.from_env({})`, keeps the offline `mock` default, and `calm-down-finalize` stays offline: it
+loads no live configuration and needs no Claude settings or login. Defaulting a provider never opens the
+gate: `AGENT_LAB_ALLOW_CLAUDE_CLI=1` remains an explicit operator opt-in, and `AGENT_LAB_PROVIDER=mock`
+with fixture retrieval stays entirely offline. Fixture retrieval with Claude still launches Claude and
+consumes Claude quota; retrieval selection defaults to `fixture`.
+
+Research reads exactly one optional file, `.env.live` at the **checkout root** (the directory holding
+`pyproject.toml`, found from the installed module's location, never from the working directory or a
+parent search). It is git-ignored. A missing file is harmless. When `agent_lab` is installed as a package
+rather than run from a checkout there is no checkout root, so no file is read and the process environment
+and defaults apply. Precedence: process environment (including explicitly empty values) over the file
+over command defaults. The result is resolved once, before settings, research-bound overrides, retrieval
+selection and the launch gate, and is passed to the run explicitly; it is never exported to the process
+environment, so it cannot leak into a later command. `CI` and `KUBERNETES_SERVICE_HOST` count only when
+set in the process environment (even if empty); a file cannot set them. `OPENALEX_API_KEY` is read from the
+process environment only.
+
+The file grammar is deliberately tiny and never executes anything: blank lines, `#` comment lines, and
+`KEY=VALUE` (key `[A-Za-z_][A-Za-z0-9_]*`; the value is literal text, optionally in one matching pair of
+single or double quotes). No `export`, interpolation, escapes, command substitution or sourcing; `$(...)`,
+backticks and `$VAR` stay literal text. A malformed line, unbalanced quote or duplicate key is a
+`config` error that names the line, never the value.
+
+**Effort.** Optional `AGENT_LAB_CLAUDE_EFFORT` adds `--effort <level>` to each launch. Accepted values,
+from the installed CLI's `claude --help`: `low`, `medium`, `high`, `xhigh`, `max`. An invalid value fails
+before any subprocess launch; unset omits the argument; a CLI that rejects the flag fails as
+`config`/`unsupported_flag` with no retry or fallback. The effective effort is part of the Claude run's
+`config_hash`; the general mock/Gemini hash is unchanged.
 
 A successful run makes exactly **two** CLI launches that share one context (one deadline from
 `AGENT_LAB_DEADLINE_SECONDS`, one request allowance of 2, one usage tally):
@@ -152,9 +182,9 @@ such, the retrieval calls as `tool_calls`, and a `config_hash` covering the mode
 both phase instructions, phase allocations and retrieval bounds.
 
 **Phase allocations.** `AGENT_LAB_CLAUDE_PLAN_OUTPUT_TOKENS` (default 1,000) and
-`AGENT_LAB_CLAUDE_SYNTHESIS_OUTPUT_TOKENS` (default 4,000), about 5,000 output tokens per run. Each is
+`AGENT_LAB_CLAUDE_SYNTHESIS_OUTPUT_TOKENS` (default 20,000). Each is
 checked against the CLI's *reported* usage after that response: an allocation expectation, not a
-service-side cap. Subscription capacity for a run is not proven. Every live use needs the per-launch
+service-side cap. An owner-reported observation of 5,820 total output tokens is not measured synthesis usage and does not prove subscription capacity for a run. Every live use needs the per-launch
 authorization below, unless the activated personal-use allowance applies.
 
 Offline tests (`tests/test_calm_down.py`) drive a fake `claude` executable through both phases with the
@@ -178,7 +208,7 @@ path above is its only user.
   the owner's private address), each live invocation needs its own owner authorization (planning and
   synthesis separately, at the exact commit and model, naming the phase allocation) plus the OWNER AUTHORIZATION RECORD in `CONTRIBUTING.md`. A launched call consumes that
   authorization even if it fails. Use is existing-subscription only: no API billing, paid overage, or
-  automatic paid fallback. The expected live use is one research run of about 5,000 output tokens.
+  automatic paid fallback. The expected live use is one research run; see the phase allocations above.
 - **Subprocess boundary.** Argument array, no shell, prompt on stdin, a fresh empty temporary working
   directory, and
   `claude -p --output-format json --tools "" --no-session-persistence --disable-slash-commands --setting-sources "" --model <model>`.

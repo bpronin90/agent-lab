@@ -2351,3 +2351,19 @@ def test_delayed_index_redirect_after_deadline_sends_no_next_request(monkeypatch
         with pytest.raises(retrieval.ModelRetry, match="deadline"):
             retrieval.discover_bls_releases()
     assert _bls_urls(seen) == [BLS_INDEX]  # /next was never requested
+
+
+def test_slow_dns_past_deadline_opens_no_request(monkeypatch):
+    seen = _bls_web(monkeypatch)
+    state = {"expired": False}
+
+    def slow_dns(*a, **k):
+        state["expired"] = True  # resolution returns after the shared deadline
+        return [(0, 0, 0, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(retrieval.socket, "getaddrinfo", slow_dns)
+    with research_session("live", reference_date=TODAY) as session:
+        session.expired = lambda: state["expired"]
+        with pytest.raises(retrieval.ModelRetry, match="deadline"):
+            retrieval.discover_bls_releases()
+    assert seen == []

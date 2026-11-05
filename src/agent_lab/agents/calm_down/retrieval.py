@@ -368,9 +368,10 @@ def safe_get(url: str, client: httpx.Client | None = None, resolve: bool = True,
     client = client or _client()
     try:
         for _ in range(MAX_REDIRECTS + 1):
+            check_url(url, resolve=resolve)
+            # After validation (DNS can be slow), immediately before the request opens.
             if expired is not None and expired():
                 raise RetrievalError("deadline expired before the next request")
-            check_url(url, resolve=resolve)
             with client.stream("GET", url) as response:
                 if response.is_redirect:
                     if no_redirects:

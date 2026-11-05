@@ -143,14 +143,14 @@ def decode_fear(fear_b64: str) -> str:
 # ---------------------------------------------------------------- locks and durable files
 
 @contextmanager
-def _lock(path: Path, blocking: bool = True) -> Iterator[None]:
+def _lock(path: Path, blocking: bool = True) -> Iterator[int]:
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
             raise Refusal("another_run_in_progress") from None
-        yield
+        yield fd
     finally:
         os.close(fd)  # releases the flock
 
@@ -375,33 +375,45 @@ def _cli_env(env: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
-def _launch_cli(fear: str, out_dir: Path, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
+def _launch_cli(fear: str, out_dir: Path, cwd: Path, env: Mapping[str, str],
+                lock_fd: int | None = None) -> tuple[int, str]:
     # Argument array, shell=False, fixed executable/subcommand, application-generated output path.
     # "--" makes a leading hyphen in the fear literal data.
     argv = [*CLI_ARGV, "calm-down", "--unreviewed", "--out", str(out_dir), "--", fear]
     proc = subprocess.Popen(argv, shell=False, cwd=cwd, env=_cli_env(env), stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
-    try:
-        stdout, _ = proc.communicate(timeout=RESEARCH_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
+                            # The child inherits the run lock's open file description, so the lock outlives a
+                            # runner that is killed outright, until the research process itself exits.
+                            pass_fds=(lock_fd,) if lock_fd is not None else ())
+
+    def kill() -> None:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
             pass
+
+    try:
+        stdout, _ = proc.communicate(timeout=RESEARCH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        kill()
         proc.communicate()
         raise Refusal("research_timeout") from None
+    except BaseException:  # interrupted or terminated runner: never leave research running unserialized
+        kill()
+        proc.wait()
+        raise
     return proc.returncode, stdout.decode("utf-8", "replace")
 
 
 def run_research(cfg: Config, fear_b64: str, env: Mapping[str, str], now: datetime | None = None) -> dict:
     fear = decode_fear(fear_b64)
-    with _lock(cfg.state / "run.lock", blocking=False):  # one research run at a time, before any reservation
+    with _lock(cfg.state / "run.lock", blocking=False) as run_lock:  # one run at a time, before any reservation
         eid = reserve_attempt(cfg, now)  # a crash from here on keeps the reservation
         try:
             exec_dir = cfg.executions / eid
             os.mkdir(exec_dir, 0o700)  # exclusive: an existing directory is an error
             _write_json_atomic(exec_dir / "execution.json", {"execution_id": eid})
-            code, stdout = _launch_cli(fear, exec_dir, exec_dir, env)
+            code, stdout = _launch_cli(fear, exec_dir, exec_dir, env, run_lock)
             if code != 0:
                 raise Refusal("research_failed")
             try:

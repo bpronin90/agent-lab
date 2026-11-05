@@ -249,6 +249,40 @@ def test_timeout_kills_research_and_keeps_the_reservation(host, monkeypatch):
     assert len((host.root / "state" / "ledger.jsonl").read_text().splitlines()) == 1
 
 
+def test_interrupted_runner_kills_its_research_child(host, monkeypatch):
+    started = {}
+    real = subprocess.Popen
+
+    def spy(argv, **kw):
+        started["proc"] = real(argv, **kw)
+        return started["proc"]
+
+    def interrupted(self, timeout=None):
+        raise KeyboardInterrupt  # the runner is terminated while the child is still researching
+
+    host.env["FAKE_MODE"] = "hang"
+    monkeypatch.setattr(runner.subprocess, "Popen", spy)
+    monkeypatch.setattr(real, "communicate", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_ok(host, FAKE_MODE="hang")
+    assert started["proc"].poll() is not None  # reaped and dead, not still running
+    monkeypatch.undo()
+
+
+def test_research_child_inherits_the_run_lock(host, monkeypatch):
+    seen = {}
+    real = subprocess.Popen
+
+    def spy(argv, **kw):
+        seen.update(kw)
+        seen["lock_target"] = os.readlink(f"/proc/self/fd/{kw['pass_fds'][0]}")
+        return real(argv, **kw)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", spy)
+    run_ok(host)
+    assert seen["lock_target"] == str(host.root / "state" / "run.lock")
+
+
 def test_concurrent_reservations_never_over_allocate(host):
     results, errors = [], []
 

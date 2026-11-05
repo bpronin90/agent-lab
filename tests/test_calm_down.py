@@ -2274,3 +2274,17 @@ def test_redirected_release_is_refused_and_not_dated(tmp_path, fake_claude, monk
     assert len(launches()) == 1 and not (tmp_path / "bundle.json").exists()
     assert any("publication date cannot be verified" in p for p in result.report.problems)
     assert target not in _bls_urls(seen)[1:]  # the redirect target was never requested or registered
+
+
+def test_claude_lopsided_labor_plan_still_reads_both_sides(tmp_path, fake_claude, monkeypatch):
+    plan = {"queries": [{"side": "supports_fear", "query": f"AI displacement study {w}"}
+                        for w in ("accountants", "lawyers", "clerks", "analysts", "auditors")]
+            + [{"side": "challenges_fear", "query": "measured labor outcomes after automation"}]}
+    launches = fake_claude(plan=plan)
+    seen = _bls_web(monkeypatch)
+    result = run_calm_down(LABOR_FEAR, claude_settings(), "live", tmp_path)
+    assert result.record.status == "succeeded", result.record.error
+    assert len(launches()) == 2 and _bls_urls(seen) == [BLS_INDEX, _empsit(R1), _empsit(R2)]
+    searched = [c.args["query"] for c in result.record.tool_calls if c.tool_name == "search_sources"]
+    assert searched[1] == "measured labor outcomes after automation"  # sides alternate
+    assert [c.tool_name for c in result.record.tool_calls].count("read_source") == 10

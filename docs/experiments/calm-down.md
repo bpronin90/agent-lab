@@ -136,7 +136,8 @@ releases, through the same `safe_get` path. No paid API, new provider, dependenc
 - **Bounds.** One index fetch and at most two release fetches per run, newest first. Each attempt,
   including discovery and failures, is counted against the 14-read session cap before any request.
   On the Claude path the releases take two of the twelve planned reads (academic reads drop to ten, still
-  at most two per query) and two texts' worth of the 60,000-character evidence cap. They are read only
+  at most two per query, with queries taken alternately by side so the smaller cap cannot starve
+  either side) and two texts' worth of the 60,000-character evidence cap. They are read only
   after both sides have academic coverage and never count toward either side. A failure or an expired
   deadline ends the run before synthesis, with no retry or fallback.
 - **Dates.** The publication date comes from the publisher's dated archive file name only; links

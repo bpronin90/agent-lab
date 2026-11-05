@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import uuid
+from itertools import zip_longest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
@@ -287,7 +288,10 @@ def _retrieve(plan: QueryPlan, ctx: claude_cli.ClaudeCliContext, session: Resear
     academic_reads = 0
     academic_read_cap = CLAUDE_PLANNED_READS - (BLS_MAX_RELEASES if primary else 0)
     academic_char_cap = CLAUDE_MAX_EVIDENCE_CHARS - (BLS_MAX_RELEASES * MAX_TEXT_CHARS if primary else 0)
-    for item in plan.queries:
+    # Alternate sides (each keeping its planned order) so a reduced read cap cannot starve one side.
+    by_side = [[q for q in plan.queries if q.side == side] for side in ("supports_fear", "challenges_fear")]
+    ordered = [q for pair in zip_longest(*by_side) for q in pair if q is not None]
+    for item in ordered:
         calls.append(ToolCallRecord(tool_name="search_sources", args={"query": item.query}))
         listing = _within_deadline(ctx, search_sources, item.query)
         if listing == "No results.":

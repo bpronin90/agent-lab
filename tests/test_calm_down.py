@@ -1555,3 +1555,86 @@ def test_cli_invalid_file_values_never_echoed(tmp_path, monkeypatch, capsys, lin
     err = capsys.readouterr().err
     assert "config" in err or "error" in err
     assert "private-token-example" not in err and "9999" not in err
+
+
+# ---------------------------------------------------------------- unreviewed rendering mode (#36)
+
+def test_default_research_still_waits_for_human_review(tmp_path):
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path)
+    assert result.report.status == "needs_review" and result.report.unreviewed is False
+    assert not (tmp_path / "email.html").exists() and not (tmp_path / "mechanical-report.json").exists()
+    assert "human_review" not in json.loads((tmp_path / "bundle.json").read_text())
+    # review hashes are exactly what they were: the default path does not know about the new mode
+    request = json.loads((tmp_path / "review-request.json").read_text())
+    assert request["editorial"]["hash"] in fixture_review()["approvals"]
+
+
+def test_unreviewed_mode_renders_bannered_edition_without_fabricating_approval(tmp_path):
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, unreviewed=True)
+    assert result.ok and result.report.status == "complete" and result.report.unreviewed
+    assert result.report.reviewer is None and result.report.pending_review == []
+    html, text = (tmp_path / "email.html").read_text(), (tmp_path / "email.txt").read_text()
+    for body in (html, text):
+        assert "Unreviewed, AI-generated" in body and "FIXTURE PREVIEW" in body  # fixture label retained
+        assert "approved each claim" not in body and "claims were approved by" not in body
+    assert "do not establish that the claims are factually supported" in html
+    assert "absent (unreviewed mode)" in (tmp_path / "research-dossier.md").read_text()
+    report = json.loads((tmp_path / "mechanical-report.json").read_text())
+    assert report["human_review"] == "absent" and report["reviewer"] is None and report["unreviewed"] is True
+    assert report["email_html_sha256"] == hashlib.sha256(html.encode()).hexdigest()
+    assert report["email_txt_sha256"] == hashlib.sha256(text.encode()).hexdigest()
+    bundle = json.loads((tmp_path / "bundle.json").read_text())
+    assert bundle["human_review"] == "absent" and "approvals" not in json.dumps(bundle)
+
+
+@pytest.mark.parametrize("mutate,needle", [
+    (lambda d: finding(d, "F1").update(evidence_quote="a sentence no source ever contained"), "verbatim"),
+    (lambda d: finding(d, "F1").update(claim="Exactly 99 percent of lawyers are affected"), "numbers"),
+    (lambda d: d.update(verdict="Lawyers are safe forever, guaranteed."), "guarantee"),
+])
+def test_unreviewed_mode_keeps_every_mechanical_check(mutate, needle):
+    data = load_mock_dossier()
+    mutate(data)
+    report = verify_dossier(CalmDownDossier.model_validate(data), read_all_fixture_sources(), None, unreviewed=True)
+    text = " ".join(r.reason for r in report.rejected) + " ".join(report.problems)
+    assert needle in text
+    assert not report.ok  # a rejected finding or problem is never excused by skipping human review
+
+
+def test_unreviewed_failures_render_nothing(tmp_path, monkeypatch):
+    _fail_run(monkeypatch)
+    result = run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, unreviewed=True)
+    assert not result.ok
+    assert not (tmp_path / "email.html").exists() and not (tmp_path / "mechanical-report.json").exists()
+
+
+def test_unreviewed_banner_and_escaping():
+    d = dossier(opening="Cousin <script>alert(x)</script> & friends, calm down please now.")
+    sources = read_all_fixture_sources()
+    report = verify_dossier(d, sources, None, unreviewed=True)
+    assert report.ok, report.problems
+    for fixture in (True, False):
+        html = render_email_html(d, report, sources, fixture=fixture, unreviewed=True)
+        assert "Unreviewed, AI-generated" in html and "<script>alert" not in html
+        assert ("FIXTURE PREVIEW" in html) is fixture
+    from agent_lab.agents.calm_down.render import render_email_text
+    assert "*** Unreviewed, AI-generated ***" in render_email_text(d, report, sources, False, True)
+
+
+def test_finalize_clears_a_stale_mechanical_report(tmp_path):
+    run_calm_down(FEAR, OFFLINE, "fixture", tmp_path, unreviewed=True)
+    assert (tmp_path / "mechanical-report.json").exists()
+    finalize_calm_down(tmp_path, {"reviewer": "x", "approvals": []})
+    assert not (tmp_path / "mechanical-report.json").exists() and not (tmp_path / "email.html").exists()
+
+
+def test_cli_unreviewed_flag_is_explicit_and_hyphen_safe(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LAB_PROVIDER", "mock")
+    monkeypatch.setenv("AGENT_LAB_RUN_LOG_DIR", str(tmp_path / "runs"))
+    assert main(["calm-down", FEAR, "--out", str(tmp_path / "a")]) == 5  # default unchanged
+    capsys.readouterr()
+    assert main(["calm-down", "--unreviewed", "--out", str(tmp_path / "b"), "--", "--out; $(id) `x`"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["unreviewed"] is True and summary["human_review"] == "absent" and summary["pending_review"] == []
+    assert "--out; $(id) `x`" in json.loads((tmp_path / "b" / "bundle.json").read_text())["fear"]
+    assert (tmp_path / "b" / "email.html").exists() and not (tmp_path / "--out; $(id) `x`").exists()

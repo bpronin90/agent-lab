@@ -14,6 +14,10 @@ from agent_lab.agents.calm_down.retrieval import SourceRecord
 from agent_lab.agents.calm_down.schemas import CalmDownDossier, Finding
 from agent_lab.agents.calm_down.verify import VerificationReport
 
+UNREVIEWED_BANNER = "Unreviewed, AI-generated"
+UNREVIEWED_NOTE = ("No person has reviewed this edition. Mechanical checks only confirm that quotes appear in the "
+                   "retrieved source text; they do not establish that the claims are factually supported.")
+
 KIND_LABEL = {"demonstrated_fact": "MEASURED", "forecast": "FORECAST", "speculation": "SPECULATION"}
 KIND_COLOR = {"demonstrated_fact": "#1f7a4d", "forecast": "#7a5600", "speculation": "#8a3ffc"}
 STANCE_LABEL = {"supports_fear": "point for the robots", "challenges_fear": "point for the humans", "mixed": "it's complicated"}
@@ -100,7 +104,7 @@ def _fact_list(findings: list[Finding], cites: Citations) -> str:
 
 
 def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sources: dict[str, SourceRecord],
-                      fixture: bool) -> str:
+                      fixture: bool, unreviewed: bool = False) -> str:
     if not report.ok:
         raise ValueError("refusing to render a reassurance email from insufficient research")
     by_id = {f.id: f for f in report.verified}
@@ -108,6 +112,10 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
     banner = (f'<tr><td style="background:{INK};color:{MUSTARD};font:bold 12px/1.5 {SANS};padding:10px 20px;text-align:center;">'
               "⚠ FIXTURE PREVIEW: layout test built from hand-written offline excerpts. "
               "Not live research, not verified quotations. Do not send.</td></tr>") if fixture else ""
+    if unreviewed:
+        banner += (f'<tr><td style="background:#b5121b;color:#ffffff;font:bold 16px/1.5 {SANS};padding:14px 20px;text-align:center;">'
+                   f'{_e(UNREVIEWED_BANNER)}<div style="font:13px/1.5 {SANS};font-weight:normal;margin-top:4px;">'
+                   f'{_e(UNREVIEWED_NOTE)}</div></td></tr>')
     shown = set(dossier.doomers_get_right) | set(dossier.reasons_to_chill)
     extra = [f for f in report.verified if f.id not in shown]
 
@@ -149,12 +157,16 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
         f'{" · fixture excerpt" if sources[sid].backend == "fixture" else ""}</span></li>'
         for sid in cites.order)
     uncert = "".join(f"<li>{_e(u)}</li>" for u in dossier.uncertainties)
+    review_note = (_e("Every quote above was matched against the text retrieved from the source it cites. " + UNREVIEWED_NOTE)
+                   if unreviewed else
+                   "Every quote above was matched against the text retrieved from the source it cites, and "
+                   f'{_e(report.reviewer or "a human reviewer")} approved each claim as a fair reading of its evidence.')
     footer = f"""
 <tr><td class="pad" style="padding:24px 32px 32px 32px;font:13px/1.5 {SANS};color:{INK};">
 <div style="font:bold 14px {SANS};letter-spacing:2px;">RECEIPTS</div>
 <ol style="padding-left:20px;margin:10px 0 16px 0;">{refs}</ol>
 {f'<div style="font:bold 14px {SANS};letter-spacing:2px;">STILL UNCERTAIN</div><ul style="padding-left:20px;margin:8px 0 16px 0;">{uncert}</ul>' if uncert else ''}
-<div style="color:#575170;">Researched and drafted by Agent Lab's Calm Down agent. Every quote above was matched against the text retrieved from the source it cites, and {_e(report.reviewer or "a human reviewer")} approved each claim as a fair reading of its evidence. This email is for perspective, not career, legal or financial advice. Nobody can promise any profession is safe forever, including this email.</div>
+<div style="color:#575170;">Researched and drafted by Agent Lab's Calm Down agent. {review_note} This email is for perspective, not career, legal or financial advice. Nobody can promise any profession is safe forever, including this email.</div>
 </td></tr>"""
 
     page = f"""<!DOCTYPE html>
@@ -181,7 +193,7 @@ def render_email_html(dossier: CalmDownDossier, report: VerificationReport, sour
 
 
 def render_email_text(dossier: CalmDownDossier, report: VerificationReport, sources: dict[str, SourceRecord],
-                      fixture: bool) -> str:
+                      fixture: bool, unreviewed: bool = False) -> str:
     if not report.ok:
         raise ValueError("refusing to render a reassurance email from insufficient research")
     by_id = {f.id: f for f in report.verified}
@@ -190,6 +202,8 @@ def render_email_text(dossier: CalmDownDossier, report: VerificationReport, sour
     out: list[str] = []
     if fixture:
         out += ["*** FIXTURE PREVIEW: built from hand-written offline excerpts. Not live research. Do not send. ***", ""]
+    if unreviewed:
+        out += [f"*** {UNREVIEWED_BANNER} ***", wrap(UNREVIEWED_NOTE), ""]
     out += [dossier.headline, dossier.subtitle, "=" * 72, "", wrap(dossier.opening), ""]
     bar = "#" * dossier.doom_meter.score + "." * (10 - dossier.doom_meter.score)
     out += ["THE DOOM METER (highly subjective, not a forecast)", f"[{bar}] {dossier.doom_meter.score}/10: {dossier.doom_meter.label}",
@@ -222,25 +236,28 @@ def render_email_text(dossier: CalmDownDossier, report: VerificationReport, sour
     for n, sid in enumerate(cites.order, 1):
         s = sources[sid]
         out.append(f"[{n}] {s.title}. {s.publisher}{', ' + str(s.year) if s.year else ''}. {s.url}")
-    out += ["", wrap(f"Quotes were matched against retrieved source text; claims were approved by "
-                     f"{report.reviewer or 'a human reviewer'}."),
+    out += ["", wrap("Quotes were matched against retrieved source text. " + UNREVIEWED_NOTE) if unreviewed else
+            wrap(f"Quotes were matched against retrieved source text; claims were approved by "
+                 f"{report.reviewer or 'a human reviewer'}."),
             wrap("Researched and drafted by Agent Lab's Calm Down agent. Perspective, not career, legal "
                      "or financial advice. Nobody can promise any profession is safe forever.")]
     return "\n".join(out) + "\n"
 
 
 def render_dossier_md(dossier: CalmDownDossier, report: VerificationReport, sources: dict[str, SourceRecord],
-                      mode: str, run_meta: dict) -> str:
+                      mode: str, run_meta: dict, unreviewed: bool = False) -> str:
     md = [f"# Research dossier: {dossier.fear}", ""]
     if mode == "fixture":
         md += ["> **FIXTURE PREVIEW.** Every source text below is a hand-written offline excerpt that paraphrases a",
                "> real public source from memory. Verification here proves the pipeline only checks quotes against",
                "> retrieved text. It does **not** prove these quotations or numbers are accurate. A live run is required.", ""]
+    if unreviewed:
+        md += [f"> **{UNREVIEWED_BANNER}.** {UNREVIEWED_NOTE}", ""]
     md += ["## Run", ""] + [f"- **{k}:** `{v}`" for k, v in run_meta.items()] + [f"- **retrieval mode:** `{mode}`", ""]
     md += ["## Verification outcome", "", f"- **status:** `{report.status}`",
            f"- **verified findings:** {len(report.verified)} of {len(dossier.findings)}",
            f"- **distinct verified works:** {report.distinct_works}",
-           f"- **human support review:** {('approved by ' + report.reviewer) if report.ok else 'pending: ' + ', '.join(report.pending_review) if report.pending_review else 'not reached'}", ""]
+           f"- **human support review:** {'absent (unreviewed mode)' if unreviewed and report.ok else ('approved by ' + report.reviewer) if report.ok else 'pending: ' + ', '.join(report.pending_review) if report.pending_review else 'not reached'}", ""]
     if report.problems:
         md += ["### Blocking problems", ""] + [f"- {p}" for p in report.problems] + [""]
     if report.rejected:

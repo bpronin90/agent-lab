@@ -238,9 +238,73 @@ path above is its only user.
 Tests (`tests/test_claude_cli.py`) run a generated fake `claude` executable offline. They do not prove
 the installed CLI's flags, native login, subscription billing behavior, or a live research run.
 
+## Unreviewed rendering and local n8n delivery (#36)
+
+**Unreviewed mode.** `agent-lab calm-down --unreviewed --out <dir> -- <fear>` is an explicit opt-in that
+skips only the human support approval. Every other check (citations, quotes, numbers, negation, balance,
+schema, bundle integrity, output safety) still runs; a failure renders nothing. No approval, review hash or
+reviewer is recorded: the summary, `mechanical-report.json` and `bundle.json` say human review is
+`absent`, and the edition carries a prominent **"Unreviewed, AI-generated"** banner in HTML and text (the
+fixture label is kept too). Mechanical acceptance does not establish that a claim is factually supported.
+Without the flag nothing changes: research stops at `needs_review`, and `calm-down-finalize` still needs a
+person's review file. `mechanical-report.json` is bound to the exact `email.html`/`email.txt` digests.
+
+**Transport.** Per the owner's direction on #36, host execution goes through the **n8n SSH node** to the
+host; the owner reported that n8n -> SSH -> host connectivity and subscription-login visibility work. We did
+not test that path, any model request, Gmail, or the runner under n8n. The export
+`n8n/agent-lab-calm-down-email.json` is inactive with one manual trigger and no schedule or webhook. It
+contains no credential, address or host path: attach the SSH and Gmail credentials in n8n yourself, and
+define `AGENT_LAB_CALM_DOWN_PYTHON` (interpreter that can import `agent_lab`),
+`AGENT_LAB_CALM_DOWN_RUNNER` (path to `scripts/calm-down-delivery.py`), `AGENT_LAB_CALM_DOWN_ROOT` and
+`AGENT_LAB_CALM_DOWN_RECIPIENT` in the SSH login environment. No new listener or infrastructure is added.
+
+**Flow.** Manual trigger -> fear field -> a Code node bounds the fear and base64-encodes it (so only
+`[A-Za-z0-9+/=]` ever reaches the remote shell) -> SSH `run` -> gate -> SSH `claim` -> gate -> Gmail node
+(HTML body of the validated `email.html`, fixed subject, recipient from the runner's private configuration)
+-> SSH `ack sent`, or `ack unknown` from the Gmail error output. The SSH node does not fail on a non-zero
+exit code, so the gates stop the workflow on any refusal. All SSH and Gmail nodes have retries disabled.
+
+**Host runner** (`scripts/calm-down-delivery.py`, standard library only). It decodes the fear, validates
+local configuration, reserves an attempt, launches `python -m agent_lab calm-down --unreviewed --out <generated> -- <fear>`
+as an argument array with `shell=False`, forced `claude-cli`/`claude-sonnet-5-5`/live retrieval, and
+validates the result. It never sends email.
+
+- **Private state.** `AGENT_LAB_CALM_DOWN_ROOT` must be an absolute, owner-only (no group/other bits) real
+  directory with `state/` and `executions/` inside. `runner init` creates them and an empty ledger. The
+  owner activates by writing `active` into `state/ALLOWANCE` (after activating the allowance in
+  `CONTRIBUTING.md`); anything else, or deleting the file, revokes.
+- **Attempts.** Before research, one line is appended and fsynced to `state/ledger.jsonl` under a lock: at most
+  3 per America/New_York day (23- and 25-hour DST days included), a fourth is refused, and a missing,
+  corrupt, torn or unreadable ledger is treated as exhausted. A crash, timeout or failure keeps the
+  reservation. One research run at a time (a busy run lock refuses without reserving). The runner is a Linux
+  child subreaper (refused before reserving if unavailable); on timeout, interruption or normal exit it
+  SIGKILLs and reaps every descendant, including Claude processes in their own sessions, before releasing
+  the run lock. Limit: if the runner itself is SIGKILLed, the research CLI keeps the lock until it exits, but a
+  Claude process orphaned by a simultaneous kill of the CLI is not tracked. Direct manual CLI
+  runs must follow the same ledger: run `calm-down-delivery.py reserve` first and stop if it refuses.
+- **Execution directory.** A fresh, exclusively created `0700` directory named by the execution id. Before
+  `ready` and again at `claim`, the runner reads fixed file names with `O_NOFOLLOW` and requires: matching
+  execution id, the same run id in the CLI summary, report and bundle, successful research, `complete`
+  mechanical status with no problems, live retrieval and no fixture source, unreviewed mode with human
+  review absent, matching HTML/text digests, the banner in both bodies, no fixture label, and no `<script>`.
+  Anything missing, stale, changed, symlinked or outside the directory refuses and marks the execution
+  `invalid`.
+- **Delivery claim.** States: `researching`, `failed`, `ready`, `send_attempted`, `sent`, `unknown`,
+  `invalid`. `claim` moves `ready` -> `send_attempted` durably under a lock *before* returning the HTML.
+  There is no edge back to `ready`, so concurrent claims, re-executions, restarts, timeouts, ambiguous Gmail
+  failures and lost acknowledgements cannot lead to an automatic second send. This is at-most-once
+  *attempt* semantics, not exactly-once delivery: an email can be lost, and nothing recovers it. A
+  `send_attempted` or `unknown` execution needs the owner to look (`runner status`).
+
+**Verification and its limits.** `tests/test_calm_down_email.py` runs offline with a fake CLI, temporary
+state and a Gmail stub; its workflow interpreter follows the export's connections and exercises state
+transitions. Parsing the JSON and running that interpreter does **not** show the export imports into or
+runs on native n8n, that the SSH node passes the environment, or that Gmail accepts the message. Native
+n8n/SSH/host runner/Gmail behavior and live research are unverified here.
+
 ## Kubernetes / n8n
 
 No new infrastructure is needed. The existing image and Job pattern work: override the container args with
 `["calm-down", "<fear>", "--out", "/data/runs/calm-down"]`, and collect the files from the runs volume.
-Nothing here schedules runs or sends email. The personal-use allowance permits manually
+Nothing here schedules runs or sends email (the manual workflow above sends only when the owner triggers it). The personal-use allowance permits manually
 triggering local n8n only; it does not permit schedules, webhooks, or Kubernetes Claude execution.
